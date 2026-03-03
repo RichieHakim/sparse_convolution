@@ -64,8 +64,7 @@ class Toeplitz_convolution2d():
         verbose: Union[bool, int] = False,
     ):
         """
-        Initializes the Toeplitz_convolution2d object and stores the Toeplitz
-        matrix.
+        Initializes the Toeplitz_convolution2d object.
         """
         ## Type checking
         assert isinstance(x_shape, (tuple, list)), f"x_shape must be a tuple. Found: {type(x_shape)}"
@@ -78,43 +77,13 @@ class Toeplitz_convolution2d():
         assert isinstance(mode, str), "mode must be a string"
         assert mode in ['full', 'same', 'valid'], "mode must be 'full', 'same', or 'valid'"
 
-        # if dtype is not None:
-        #     assert isinstance(dtype, np.dtype), "dtype must be a numpy dtype"
-
-        ## Warn if x_shape is large
-        if verbose > 0:
-            n_nz_elements_expected = x_shape[0]*x_shape[1]*k.shape[0]*k.shape[1]
-            if n_nz_elements_expected >= 1e8:
-                print("Warning: Expected number of non-zero elements in the Toeplitz matrix is large. \n"
-                      f"(x_shape[0]*x_shape[1]*k.shape[0]*k.shape[1]) = {n_nz_elements_expected} non-zero elements. \n"
-                      "This will likely be slow and have a large memory footprint. \n"
-                      "Consider breaking the `x` array into smaller chunks or tiles so that `x_shape` can be smaller and performing the convolution in batches.")
-
-
-        self.k = k = np.flipud(k.copy())
+        self.k = k.copy()
         self.mode = mode
         self.x_shape = x_shape
-        dtype = k.dtype if dtype is None else dtype
+        self.dtype = k.dtype if dtype is None else dtype
 
         if mode == 'valid':
             assert x_shape[0] >= k.shape[0] and x_shape[1] >= k.shape[1], "x must be larger than k in both dimensions for mode='valid'"
-
-        self.so = so = size_output_array = ( (k.shape[0] + x_shape[0] -1), (k.shape[1] + x_shape[1] -1))  ## 'size out' is the size of the output array
-
-        ## make the toeplitz matrices
-        t = toeplitz_matrices = [scipy.sparse.diags(
-            diagonals=np.ones((k.shape[1], x_shape[1]), dtype=dtype) * k_i[::-1][:,None], 
-            offsets=np.arange(-k.shape[1]+1, 1), 
-            shape=(so[1], x_shape[1]),
-            dtype=dtype,
-        ) for k_i in k[::-1]]  ## make the toeplitz matrices for the rows of the kernel
-        tc = toeplitz_concatenated = scipy.sparse.vstack(t + [scipy.sparse.dia_matrix((t[0].shape), dtype=dtype)]*(x_shape[0]-1))  ## add empty matrices to the bottom of the block due to padding, then concatenate
-
-        ## make the double block toeplitz matrix
-        self.dt = double_toeplitz = scipy.sparse.hstack([self._roll_sparse(
-            x=tc, 
-            shift=(ii>0)*ii*(so[1])  ## shift the blocks by the size of the output array
-        ) for ii in range(x_shape[0])]).tocsr()
     
     def __call__(
         self,
@@ -123,7 +92,11 @@ class Toeplitz_convolution2d():
         mode: Optional[str] = None,
     ) -> Union[np.ndarray, scipy.sparse.csr_matrix]:
         """
-        Convolve the input array with the kernel.
+        Convolve the input array with the kernel using an optimized broadcasting approach.
+        Instead of pre-building complete matrices, it extracts non-zero coordinates 
+        (COO format) from both input and kernel and broadcasts their indices and values 
+        to instantaneously calculate valid convolution points, offering huge memory 
+        savings and fast execution time.
 
         Args:
             x (Union[np.ndarray, scipy.sparse.csc_matrix,
@@ -158,60 +131,79 @@ class Toeplitz_convolution2d():
         if mode is None:
             mode = self.mode  ## use the mode that was set in the init if not specified
         issparse = scipy.sparse.issparse(x)
-        
-        if batching:
-            x_v = x.T  ## transpose into column vectors
-        else:
-            x_v = x.reshape(-1, 1)  ## reshape 2D array into a column vector
-        
-        if issparse:
-            x_v = x_v.tocsc()
-        
-        out_v = self.dt @ x_v  ## if sparse, then 'out_v' will be a csc matrix
-            
-        ## crop the output to the correct size
+
         if mode == 'full':
-            t = 0
-            b = self.so[0]+1
-            l = 0
-            r = self.so[1]+1
-        if mode == 'same':
-            t = (self.k.shape[0]-1)//2
-            b = -(self.k.shape[0]-1)//2
-            l = (self.k.shape[1]-1)//2
-            r = -(self.k.shape[1]-1)//2
-
-            b = self.x_shape[0]+1 if b==0 else b
-            r = self.x_shape[1]+1 if r==0 else r
-        if mode == 'valid':
-            t = (self.k.shape[0]-1)
-            b = -(self.k.shape[0]-1)
-            l = (self.k.shape[1]-1)
-            r = -(self.k.shape[1]-1)
-
-            b = self.x_shape[0]+1 if b==0 else b
-            r = self.x_shape[1]+1 if r==0 else r
-        
-        if batching:
-            idx_crop = np.zeros((self.so), dtype=np.bool_)
-            idx_crop[t:b, l:r] = True
-            idx_crop = idx_crop.reshape(-1)
-            out = out_v[idx_crop,:].T
+            H_out = self.x_shape[0] + self.k.shape[0] - 1
+            W_out = self.x_shape[1] + self.k.shape[1] - 1
+            t = l = 0
+        elif mode == 'same':
+            H_out = self.x_shape[0]
+            W_out = self.x_shape[1]
+            t = (self.k.shape[0] - 1) // 2
+            l = (self.k.shape[1] - 1) // 2
+        elif mode == 'valid':
+            H_out = self.x_shape[0] - self.k.shape[0] + 1
+            W_out = self.x_shape[1] - self.k.shape[1] + 1
+            t = self.k.shape[0] - 1
+            l = self.k.shape[1] - 1
+            if H_out <= 0 or W_out <= 0:
+                raise ValueError("x must be larger than k in both dimensions for mode='valid'")
         else:
-            if issparse:
-                out = out_v.reshape((self.so)).tocsc()[t:b, l:r]
-            else:
-                out = out_v.reshape((self.so))[t:b, l:r]  ## reshape back into 2D array and crop
-        return out
-    
-    def _roll_sparse(
-        self,
-        x: scipy.sparse.csr_matrix,
-        shift: int,
-    ):
-        """
-        Roll columns of a sparse matrix.
-        """
-        out = x.copy()
-        out.row += shift
+            raise ValueError("mode must be 'full', 'same', or 'valid'")
+
+        k_coo = scipy.sparse.coo_matrix(self.k)
+        k_r = k_coo.row
+        k_c = k_coo.col
+        k_d = k_coo.data
+
+        x_coo = scipy.sparse.coo_matrix(x)
+        if batching:
+            B = x.shape[0]
+            batch_idx = x_coo.row
+            x_idx = x_coo.col
+            x_r = x_idx // self.x_shape[1]
+            x_c = x_idx % self.x_shape[1]
+        else:
+            batch_idx = np.zeros_like(x_coo.row)
+            x_r = x_coo.row
+            x_c = x_coo.col
+        
+        # Broadcasting logic
+        new_r = x_r[:, None] + k_r[None, :] - t
+        new_c = x_c[:, None] + k_c[None, :] - l
+        new_b = np.repeat(batch_idx[:, None], len(k_d), axis=1)
+        new_d = x_coo.data[:, None] * k_d[None, :]
+
+        # Ravel for valid mask and csr sparse input
+        new_r = new_r.ravel()
+        new_c = new_c.ravel()
+        new_b = new_b.ravel()
+        new_d = new_d.ravel()
+
+        # Filter out-of-bounds bounds
+        valid_mask = (new_r >= 0) & (new_r < H_out) & (new_c >= 0) & (new_c < W_out)
+        
+        new_r = new_r[valid_mask]
+        new_c = new_c[valid_mask]
+        new_b = new_b[valid_mask]
+        new_d = new_d[valid_mask]
+
+        if batching:
+            out_idx = new_r * W_out + new_c
+            out = scipy.sparse.csr_matrix(
+                (new_d, (new_b, out_idx)),
+                shape=(B, H_out * W_out)
+            )
+            # Ensure return type matches dense arrays if input is a dense array
+            if not issparse:
+                out = out.toarray()
+        else:
+            out = scipy.sparse.csr_matrix(
+                (new_d, (new_r, new_c)),
+                shape=(H_out, W_out)
+            )
+            # Ensure return type matches dense arrays if input is a dense array
+            if not issparse:
+                out = out.toarray()
+
         return out
