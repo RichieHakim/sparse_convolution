@@ -13,7 +13,7 @@ print(f"--- High Intensity Benchmark ({shape[0]}x{shape[1]}, Density: 100%) ---"
 
 # --- Test: Broadcasting Engine (Lazy Approach) ---
 tic = time.time()
-conv_lazy = Toeplitz_convolution2d(shape, kernel, precompute=False)
+conv_lazy = Toeplitz_convolution2d(shape, kernel, method='lazy')
 init_lazy = time.time() - tic
 
 tic = time.time()
@@ -26,7 +26,7 @@ print(f"   Execution:      {exec_lazy:.6f}s")
 
 # --- Test: Toeplitz Engine (Precomputed Approach) ---
 tic = time.time()
-conv_pre = Toeplitz_convolution2d(shape, kernel, precompute=True)
+conv_pre = Toeplitz_convolution2d(shape, kernel, method='precomputed')
 init_pre = time.time() - tic
 
 tic = time.time()

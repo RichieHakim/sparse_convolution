@@ -67,7 +67,7 @@ class Toeplitz_convolution2d:
         mode: str = 'same',
         dtype: Optional[np.dtype] = None,
         verbose: Union[bool, int] = False,
-        precompute: bool = False,
+        method: str = 'lazy',
     ):
         """
         Initializes the Toeplitz_convolution2d object.
@@ -91,7 +91,10 @@ class Toeplitz_convolution2d:
         if mode == 'valid':
             assert x_shape[0] >= k.shape[0] and x_shape[1] >= k.shape[1], "x must be larger than k in both dimensions for mode='valid'"
         
-        if precompute:
+        self.method = method
+        assert method in ['lazy', 'precomputed'], "method must be 'lazy' or 'precomputed'"
+        
+        if self.method == 'precomputed':
             self.dt, self.so = build_toeplitz_matrix(self.x_shape, self.k, self.dtype)
     
     def __call__(
@@ -116,7 +119,7 @@ class Toeplitz_convolution2d:
         if getattr(x, 'dtype', type(x)) != self.dtype:
             x = x.astype(self.dtype)
 
-        if hasattr(self, 'dt'):
+        if self.method == 'precomputed':
             out = compute_toeplitz(
                 x=x, dt=self.dt, so=self.so, k_shape=self.k.shape,
                 x_shape=self.x_shape, mode=mode, batching=batching, issparse=issparse

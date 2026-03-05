@@ -85,6 +85,11 @@ C = conv(
 C_reshaped = np.stack([c.reshape(100, 100).toarray() for c in C], axis=0)
 ```
 
+## Performance & Scaling
+The `Toeplitz_convolution2d` class now supports two backend methods: `lazy` and `precomputed` (which can be chosen by passing `method` to the constructor).
+- **`method='lazy'`**: Optimised for very sparse inputs and **instant initialization**. Based on our benchmarks with a 10x10 kernel on a 1000x1000 matrix, the lazy method is significantly faster up to approximately **10% density (0.1)**. Since there is no huge Toeplitz matrix to build, it saves considerable memory.
+- **`method='precomputed'`**: Slower to initialize because it builds a massive sparse Toeplitz matrix. However, it is suggested and highly efficient for extremely large batch sizes (e.g., > 75) where the initial cost is amortized over many quick dense-sparse matrix multiplications.
+
 ## References
 - See: https://stackoverflow.com/a/51865516 and https://github.com/alisaaalehi/convolution_as_multiplication
     for a nice illustration.
