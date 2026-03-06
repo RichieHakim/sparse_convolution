@@ -171,14 +171,24 @@ class Toeplitz_convolution2d():
         if mode is None:
             mode = self.mode
 
+        assert mode in ('full', 'same', 'valid'), f"mode must be 'full', 'same', or 'valid'. Got: {mode!r}"
+        if mode == 'valid':
+            assert self.x_shape[0] >= self.k.shape[0] and self.x_shape[1] >= self.k.shape[1], \
+                "x must be larger than k in both dimensions for mode='valid'"
+
         issparse = scipy.sparse.issparse(x)
 
-        ## Validate input dimensions for batching mode
+        ## Validate input dimensions
         if batching:
             expected_dim = self.x_shape[0] * self.x_shape[1]
             assert x.shape[1] == expected_dim, (
                 f"When batching=True, x.shape[1] ({x.shape[1]}) must equal "
                 f"x_shape[0]*x_shape[1] ({expected_dim})"
+            )
+        else:
+            assert x.shape == (self.x_shape[0], self.x_shape[1]), (
+                f"When batching=False, x.shape ({x.shape}) must equal "
+                f"x_shape ({self.x_shape})"
             )
 
         ## Precomputed path: use pre-built Toeplitz matrix
