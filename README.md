@@ -85,6 +85,11 @@ C = conv(
 C_reshaped = np.stack([c.reshape(100, 100).toarray() for c in C], axis=0)
 ```
 
+## Methods
+The `Toeplitz_convolution2d` class supports two backend methods via the `method` parameter:
+- **`method='lazy'`** (default): Computes convolution on-the-fly via sparse COO broadcasting. Instant initialization and low memory usage. Cost scales with `nnz(x) * nnz(k)`, so it is best for sparse inputs (density < ~0.1).
+- **`method='precomputed'`**: Builds a sparse double-block Toeplitz matrix at init time and uses sparse matmul per call. Per-call cost is largely density-independent. Better for dense inputs (density > ~0.5) or large batches where the one-time build cost is amortized.
+
 ## References
 - See: https://stackoverflow.com/a/51865516 and https://github.com/alisaaalehi/convolution_as_multiplication
     for a nice illustration.
