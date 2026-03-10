@@ -6,19 +6,11 @@ Inspired by spconv's Gather-GEMM-Scatter CUDA algorithm, adapted for CPU
 input values at shifted coordinates and scatters weighted contributions into
 an output accumulator.
 
-Two internal strategies, auto-selected per call:
-
-1. **Dense accumulator**: Scatter into a dense numpy buffer per chunk, convert
-   to CSR. Fast when output pixels are not too large relative to output nnz.
-2. **COO construction**: Build COO triplets directly, then assemble CSR.
-   Better when output is very sparse + large spatial dims.
-
 Three backends:
 
-- **numpy**: Per-position vectorized ops with ``np.add.at``.
+- **numpy**: Per-position vectorized ops with ``np.add.at`` or ``np.bincount``.
 - **numba**: JIT-compiled batch-parallel scatter with prange over batch
-  images. 5-20x faster than scipy for batched sparse inputs. Best CPU
-  performance after initial JIT compilation.
+  images. Uses a chunked dense accumulator for bounded memory.
 - **torch**: PyTorch ``scatter_add_`` with automatic GPU support.
 """
 
@@ -329,9 +321,11 @@ def compute_gather_scatter(x, k, x_shape, mode, batching, dtype,
     H_out, W_out, t, l = compute_output_dims(x_shape, k.shape, mode)
     out_pixels = H_out * W_out
 
-    ## Extract kernel and input COO
+    ## Extract kernel COO (shared by all paths)
     k_r, k_c, k_d = extract_kernel_coo(k, dtype)
     n_k = len(k_d)
+
+    ## Extract input COO, then route to backend
     x_data, x_r, x_c, batch_idx, n_batch = extract_input_coo(x, x_shape, batching, dtype)
 
     ## Strategy selection heuristic:

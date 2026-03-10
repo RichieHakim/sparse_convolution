@@ -53,6 +53,7 @@ def get_method_backends(include_gpu=False):
         ('gather_scatter', 'numpy', 'cpu'),
         ('gather_scatter', 'numba', 'cpu'),
         ('gather_scatter', 'torch', 'cpu'),
+        ('direct', 'numba', 'cpu'),
     ]
 
     if include_gpu:
@@ -75,12 +76,23 @@ def get_method_backends(include_gpu=False):
 ## ---------------------------------------------------------------------------
 
 def benchmark_one(method, backend, device, x_shape, k_shape, batch_size,
-                  density, mode, n_repeats=3, n_warmup=1):
+                  density, mode, min_time=2.0, n_warmup=2):
     """
-    Benchmark a single method+backend+config combination.
+    Benchmark a single method+backend+config combination using adaptive
+    timing. Runs iterations until at least ``min_time`` seconds of wall
+    time have elapsed, then reports median/mean/std.
 
-    Returns a dict with init_times, call_times, and metadata. If the
-    combination fails (e.g. unsupported), returns None.
+    Args:
+        method, backend, device, x_shape, k_shape, batch_size, density,
+        mode: Benchmark configuration.
+        min_time (float):
+            Minimum total wall time (seconds) to spend on timed call
+            iterations. More iterations = more stable statistics.
+        n_warmup (int):
+            Number of warmup iterations (unjudged).
+
+    Returns:
+        (dict or None): Benchmark results dict, or None if skipped/failed.
     """
     np.random.seed(42)
     kernel = np.random.rand(*k_shape).astype(np.float64)
@@ -106,9 +118,10 @@ def benchmark_one(method, backend, device, x_shape, k_shape, batch_size,
             )
             _ = conv(x=x_sparse, batching=True)
 
-        ## Timed init
+        ## Timed init: adaptive loop until min_time elapsed
         init_times = []
-        for _ in range(n_repeats):
+        t_wall = time.perf_counter()
+        while (time.perf_counter() - t_wall) < min_time:
             t0 = time.perf_counter()
             conv = Toeplitz_convolution2d(
                 x_shape=x_shape, k=kernel, mode=mode,
@@ -116,9 +129,10 @@ def benchmark_one(method, backend, device, x_shape, k_shape, batch_size,
             )
             init_times.append(time.perf_counter() - t0)
 
-        ## Timed call (reuse last conv object)
+        ## Timed call: adaptive loop until min_time elapsed (reuse last conv)
         call_times = []
-        for _ in range(n_repeats):
+        t_wall = time.perf_counter()
+        while (time.perf_counter() - t_wall) < min_time:
             t0 = time.perf_counter()
             _ = conv(x=x_sparse, batching=True)
             call_times.append(time.perf_counter() - t0)
@@ -133,13 +147,15 @@ def benchmark_one(method, backend, device, x_shape, k_shape, batch_size,
             'density': density,
             'mode': mode,
             'nnz': int(x_sparse.nnz),
-            'init_times': init_times,
-            'call_times': call_times,
+            'n_init_iters': len(init_times),
+            'n_call_iters': len(call_times),
+            'init_median': float(np.median(init_times)),
             'init_mean': float(np.mean(init_times)),
             'init_std': float(np.std(init_times)),
+            'call_median': float(np.median(call_times)),
             'call_mean': float(np.mean(call_times)),
             'call_std': float(np.std(call_times)),
-            'total_mean': float(np.mean(init_times) + np.mean(call_times)),
+            'total_median': float(np.median(init_times) + np.median(call_times)),
         }
     except Exception as e:
         print(f"    FAILED: {method}+{backend}+{device}: {e}")
@@ -150,9 +166,10 @@ def benchmark_one(method, backend, device, x_shape, k_shape, batch_size,
 ## Scaling sweeps
 ## ---------------------------------------------------------------------------
 
-def run_scaling_sweeps(method_backends, n_repeats=3, quick=False):
+def run_scaling_sweeps(method_backends, min_time=2.0, quick=False):
     """
     Run 1D scaling sweeps: vary one variable at a time, fix the rest.
+    Each method+config pair is timed for at least ``min_time`` seconds.
     """
     results = []
 
@@ -268,7 +285,7 @@ def run_scaling_sweeps(method_backends, n_repeats=3, quick=False):
                     method=method, backend=backend, device=device,
                     x_shape=x_shape, k_shape=k_shape,
                     batch_size=batch_size, density=density, mode=mode,
-                    n_repeats=n_repeats,
+                    min_time=min_time,
                 )
                 if r is not None:
                     r['sweep'] = sweep_name
@@ -278,9 +295,10 @@ def run_scaling_sweeps(method_backends, n_repeats=3, quick=False):
                     label = f"{method}+{backend}"
                     if device != 'cpu':
                         label += f"+{device}"
-                    print(f"    {label:30s} init={r['init_mean']:.4f}s  "
-                          f"call={r['call_mean']:.4f}s  "
-                          f"total={r['total_mean']:.4f}s")
+                    print(f"    {label:30s} init={r['init_median']:.6f}s  "
+                          f"call={r['call_median']:.6f}s  "
+                          f"total={r['total_median']:.6f}s  "
+                          f"(n={r['n_call_iters']})")
 
     return results
 
@@ -289,9 +307,10 @@ def run_scaling_sweeps(method_backends, n_repeats=3, quick=False):
 ## Grid search
 ## ---------------------------------------------------------------------------
 
-def run_grid_search(method_backends, n_repeats=3, quick=False):
+def run_grid_search(method_backends, min_time=2.0, quick=False):
     """
     Sparse factorial grid search across all variables.
+    Each method+config pair is timed for at least ``min_time`` seconds.
     """
     results = []
 
@@ -330,7 +349,7 @@ def run_grid_search(method_backends, n_repeats=3, quick=False):
                 method=method, backend=backend, device=device,
                 x_shape=x_shape, k_shape=k_shape,
                 batch_size=batch_size, density=density, mode=mode,
-                n_repeats=n_repeats,
+                min_time=min_time,
             )
             if r is not None:
                 r['sweep'] = 'grid'
@@ -340,7 +359,8 @@ def run_grid_search(method_backends, n_repeats=3, quick=False):
                 label = f"{method}+{backend}"
                 if device != 'cpu':
                     label += f"+{device}"
-                print(f"    {label:30s} total={r['total_mean']:.4f}s")
+                print(f"    {label:30s} total={r['total_median']:.6f}s  "
+                      f"(n={r['n_call_iters']})")
 
     return results
 
@@ -385,9 +405,9 @@ def plot_scaling_sweeps(results, output_dir):
             if key not in combos:
                 combos[key] = {'x': [], 'init': [], 'call': [], 'total': []}
             combos[key]['x'].append(r['sweep_val'])
-            combos[key]['init'].append(r['init_mean'])
-            combos[key]['call'].append(r['call_mean'])
-            combos[key]['total'].append(r['total_mean'])
+            combos[key]['init'].append(r['init_median'])
+            combos[key]['call'].append(r['call_median'])
+            combos[key]['total'].append(r['total_median'])
 
         for key, data in combos.items():
             ## Sort by x value
@@ -449,7 +469,7 @@ def plot_grid_heatmap(results, output_dir):
         label = f"{r['method']}+{r['backend']}"
         if r['device'] != 'cpu':
             label += f"+{r['device']}"
-        configs[config_key][label] = r['total_mean']
+        configs[config_key][label] = r['total_median']
 
     ## Build summary table
     summary = []
@@ -494,7 +514,8 @@ def main():
     parser.add_argument('--sweep-only', action='store_true', help='Run only scaling sweeps')
     parser.add_argument('--grid-only', action='store_true', help='Run only grid search')
     parser.add_argument('--quick', action='store_true', help='Reduced grid for quick testing')
-    parser.add_argument('--repeats', type=int, default=3, help='Number of timing repeats')
+    parser.add_argument('--min-time', type=float, default=2.0,
+                        help='Minimum wall time (seconds) per method per config point')
     parser.add_argument('--no-plot', action='store_true', help='Skip plotting')
     parser.add_argument('--gpu', action='store_true', help='Include GPU benchmarks')
     args = parser.parse_args()
@@ -503,19 +524,21 @@ def main():
     output_dir.mkdir(exist_ok=True)
 
     method_backends = get_method_backends(include_gpu=args.gpu)
-    print(f"Benchmarking {len(method_backends)} method+backend combinations:")
+    print(f"Benchmarking {len(method_backends)} method+backend combinations "
+          f"(min_time={args.min_time}s per measurement):")
     for m, b, d in method_backends:
         print(f"  {m}+{b} (device={d})")
 
     ## Numba warmup: trigger JIT compilation before timing
     print("\nWarming up numba JIT...")
     try:
-        conv = Toeplitz_convolution2d(
-            x_shape=(10, 10), k=np.ones((3, 3)),
-            method='gather_scatter', backend='numba',
-        )
         x_warmup = scipy.sparse.random(2, 100, density=0.1, format='csr')
-        _ = conv(x=x_warmup, batching=True)
+        for warmup_method in ('gather_scatter', 'direct'):
+            conv = Toeplitz_convolution2d(
+                x_shape=(10, 10), k=np.ones((3, 3)),
+                method=warmup_method, backend='numba',
+            )
+            _ = conv(x=x_warmup, batching=True)
         print("  Numba JIT warmup complete")
     except Exception:
         print("  Numba not available, skipping warmup")
@@ -529,7 +552,7 @@ def main():
         print("SCALING SWEEPS")
         print("="*60)
         sweep_results = run_scaling_sweeps(
-            method_backends, n_repeats=args.repeats, quick=args.quick,
+            method_backends, min_time=args.min_time, quick=args.quick,
         )
         all_results.extend(sweep_results)
 
@@ -538,7 +561,7 @@ def main():
         print("GRID SEARCH")
         print("="*60)
         grid_results = run_grid_search(
-            method_backends, n_repeats=args.repeats, quick=args.quick,
+            method_backends, min_time=args.min_time, quick=args.quick,
         )
         all_results.extend(grid_results)
 
