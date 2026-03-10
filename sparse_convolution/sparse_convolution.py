@@ -144,7 +144,7 @@ class Toeplitz_convolution2d():
         mode: str = 'same',
         dtype: Optional[np.dtype] = None,
         verbose: Union[bool, int] = False,
-        method: str = 'lazy',
+        method: str = 'direct',
         max_buffer_bytes: int = 256 * 1024 * 1024,
         backend: Optional[str] = None,
         device: Optional[str] = None,
@@ -180,7 +180,13 @@ class Toeplitz_convolution2d():
 
         ## Resolve backend
         if backend is None:
-            if method in ('gather_scatter', 'direct'):
+            if method == 'direct':
+                assert HAS_NUMBA, (
+                    "method='direct' requires numba. Install numba or use "
+                    "method='gather_scatter' / method='precomputed'."
+                )
+                backend = 'numba'
+            elif method == 'gather_scatter':
                 backend = 'numba' if HAS_NUMBA else 'numpy'
             else:
                 backend = 'numpy'
