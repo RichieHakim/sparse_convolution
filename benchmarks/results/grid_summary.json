@@ -1,0 +1,902 @@
+[
+  {
+    "x_shape": [
+      50,
+      50
+    ],
+    "k_shape": [
+      5,
+      5
+    ],
+    "batch_size": 1,
+    "density": 0.001,
+    "mode": "same",
+    "winner": "gather_scatter+numba",
+    "winner_time": 8.495817892253398e-05,
+    "all_times": {
+      "precomputed+numpy": 0.004943933431059123,
+      "precomputed+torch": 0.005743383569642902,
+      "lazy+numpy": 0.00011374137829989195,
+      "lazy+torch": 0.00019650061149150132,
+      "gather_scatter+numpy": 0.00036575819831341505,
+      "gather_scatter+numba": 8.495817892253398e-05,
+      "gather_scatter+torch": 0.00018734978511929514,
+      "direct+numba": 0.00016758355777710674
+    }
+  },
+  {
+    "x_shape": [
+      50,
+      50
+    ],
+    "k_shape": [
+      5,
+      5
+    ],
+    "batch_size": 1,
+    "density": 0.01,
+    "mode": "same",
+    "winner": "lazy+numpy",
+    "winner_time": 0.00013492503203451633,
+    "all_times": {
+      "precomputed+numpy": 0.005299099767580629,
+      "precomputed+torch": 0.005676191789098084,
+      "lazy+numpy": 0.00013492503203451633,
+      "lazy+torch": 0.0002129916101694107,
+      "gather_scatter+numpy": 0.00016040001064538957,
+      "gather_scatter+numba": 0.00024140002205967902,
+      "gather_scatter+torch": 0.00020804158411920072,
+      "direct+numba": 0.00019919958431273698
+    }
+  },
+  {
+    "x_shape": [
+      50,
+      50
+    ],
+    "k_shape": [
+      5,
+      5
+    ],
+    "batch_size": 1,
+    "density": 0.1,
+    "mode": "same",
+    "winner": "direct+numba",
+    "winner_time": 0.00021870799828320743,
+    "all_times": {
+      "precomputed+numpy": 0.005232708179391921,
+      "precomputed+torch": 0.006039750180207193,
+      "lazy+numpy": 0.000550650036893785,
+      "lazy+torch": 0.0006541250040754676,
+      "gather_scatter+numpy": 0.0004946748027577995,
+      "gather_scatter+numba": 0.000286616338416934,
+      "gather_scatter+torch": 0.0007530667819082737,
+      "direct+numba": 0.00021870799828320743
+    }
+  },
+  {
+    "x_shape": [
+      50,
+      50
+    ],
+    "k_shape": [
+      5,
+      5
+    ],
+    "batch_size": 50,
+    "density": 0.001,
+    "mode": "same",
+    "winner": "gather_scatter+numba",
+    "winner_time": 0.00016960836946964264,
+    "all_times": {
+      "precomputed+numpy": 0.0049503664020448925,
+      "precomputed+torch": 0.007947216951288283,
+      "lazy+numpy": 0.00018058342393487692,
+      "lazy+torch": 0.0014907001750543714,
+      "gather_scatter+numpy": 0.0004451913991943002,
+      "gather_scatter+numba": 0.00016960836946964264,
+      "gather_scatter+torch": 0.001261066785082221,
+      "direct+numba": 0.00024862498976290225
+    }
+  },
+  {
+    "x_shape": [
+      50,
+      50
+    ],
+    "k_shape": [
+      5,
+      5
+    ],
+    "batch_size": 50,
+    "density": 0.01,
+    "mode": "same",
+    "winner": "direct+numba",
+    "winner_time": 0.00028465883806347845,
+    "all_times": {
+      "precomputed+numpy": 0.005822683195583522,
+      "precomputed+torch": 0.008542483602650464,
+      "lazy+numpy": 0.001324141421355307,
+      "lazy+torch": 0.002632090961560607,
+      "gather_scatter+numpy": 0.0021791165694594384,
+      "gather_scatter+numba": 0.0014791414141654968,
+      "gather_scatter+torch": 0.002782075456343591,
+      "direct+numba": 0.00028465883806347845
+    }
+  },
+  {
+    "x_shape": [
+      50,
+      50
+    ],
+    "k_shape": [
+      5,
+      5
+    ],
+    "batch_size": 50,
+    "density": 0.1,
+    "mode": "same",
+    "winner": "direct+numba",
+    "winner_time": 0.0010089169954881072,
+    "all_times": {
+      "precomputed+numpy": 0.009281708393245935,
+      "precomputed+torch": 0.00968215863686055,
+      "lazy+numpy": 0.019135217182338238,
+      "lazy+torch": 0.014086942188441753,
+      "gather_scatter+numpy": 0.011202533217146992,
+      "gather_scatter+numba": 0.004037158424034714,
+      "gather_scatter+torch": 0.015005700197070837,
+      "direct+numba": 0.0010089169954881072
+    }
+  },
+  {
+    "x_shape": [
+      50,
+      50
+    ],
+    "k_shape": [
+      5,
+      5
+    ],
+    "batch_size": 500,
+    "density": 0.001,
+    "mode": "same",
+    "winner": "direct+numba",
+    "winner_time": 0.000666175177320838,
+    "all_times": {
+      "precomputed+numpy": 0.007479574391618371,
+      "precomputed+torch": 0.028467241558246315,
+      "lazy+numpy": 0.0011518751969560983,
+      "lazy+torch": 0.01063087498769164,
+      "gather_scatter+numpy": 0.009366500168107451,
+      "gather_scatter+numba": 0.0014651250094175339,
+      "gather_scatter+torch": 0.011398425209335983,
+      "direct+numba": 0.000666175177320838
+    }
+  },
+  {
+    "x_shape": [
+      50,
+      50
+    ],
+    "k_shape": [
+      5,
+      5
+    ],
+    "batch_size": 500,
+    "density": 0.01,
+    "mode": "same",
+    "winner": "direct+numba",
+    "winner_time": 0.001242399960756302,
+    "all_times": {
+      "precomputed+numpy": 0.010354450368322433,
+      "precomputed+torch": 0.040209774975664914,
+      "lazy+numpy": 0.01607500838581473,
+      "lazy+torch": 0.028831658186390996,
+      "gather_scatter+numpy": 0.024371116585098204,
+      "gather_scatter+numba": 0.015111991786397994,
+      "gather_scatter+torch": 0.02311557501088828,
+      "direct+numba": 0.001242399960756302
+    }
+  },
+  {
+    "x_shape": [
+      50,
+      50
+    ],
+    "k_shape": [
+      5,
+      5
+    ],
+    "batch_size": 500,
+    "density": 0.1,
+    "mode": "same",
+    "winner": "direct+numba",
+    "winner_time": 0.009694375190883875,
+    "all_times": {
+      "precomputed+numpy": 0.03970865819137544,
+      "precomputed+torch": 0.05948064159601927,
+      "lazy+numpy": 0.20338320841547103,
+      "lazy+torch": 0.0946221831953153,
+      "gather_scatter+numpy": 0.10934963300824166,
+      "gather_scatter+numba": 0.04404348337557167,
+      "gather_scatter+torch": 0.12736101699993013,
+      "direct+numba": 0.009694375190883875
+    }
+  },
+  {
+    "x_shape": [
+      50,
+      50
+    ],
+    "k_shape": [
+      11,
+      11
+    ],
+    "batch_size": 1,
+    "density": 0.001,
+    "mode": "same",
+    "winner": "gather_scatter+numba",
+    "winner_time": 0.0001419829670339823,
+    "all_times": {
+      "precomputed+numpy": 0.01617473317310214,
+      "precomputed+torch": 0.02262397517915815,
+      "lazy+numpy": 0.00018090878147631885,
+      "lazy+torch": 0.00038400820922106503,
+      "gather_scatter+numpy": 0.002287275181151927,
+      "gather_scatter+numba": 0.0001419829670339823,
+      "gather_scatter+torch": 0.00029738317243754864,
+      "direct+numba": 0.0003108748001977801
+    }
+  },
+  {
+    "x_shape": [
+      50,
+      50
+    ],
+    "k_shape": [
+      11,
+      11
+    ],
+    "batch_size": 1,
+    "density": 0.01,
+    "mode": "same",
+    "winner": "direct+numba",
+    "winner_time": 0.00026149160694330934,
+    "all_times": {
+      "precomputed+numpy": 0.017155616800300776,
+      "precomputed+torch": 0.01835441661532968,
+      "lazy+numpy": 0.0003255416406318545,
+      "lazy+torch": 0.00041608321480453015,
+      "gather_scatter+numpy": 0.0002628331771120429,
+      "gather_scatter+numba": 0.0003274835646152496,
+      "gather_scatter+torch": 0.0003803749801591039,
+      "direct+numba": 0.00026149160694330934
+    }
+  },
+  {
+    "x_shape": [
+      50,
+      50
+    ],
+    "k_shape": [
+      11,
+      11
+    ],
+    "batch_size": 1,
+    "density": 0.1,
+    "mode": "same",
+    "winner": "gather_scatter+numba",
+    "winner_time": 0.0004982832120731473,
+    "all_times": {
+      "precomputed+numpy": 0.010900166560895742,
+      "precomputed+torch": 0.015323041984811426,
+      "lazy+numpy": 0.002377616614103317,
+      "lazy+torch": 0.001899100234732032,
+      "gather_scatter+numpy": 0.001111133396625519,
+      "gather_scatter+numba": 0.0004982832120731473,
+      "gather_scatter+torch": 0.0017115667229518293,
+      "direct+numba": 0.0005171918077394366
+    }
+  },
+  {
+    "x_shape": [
+      50,
+      50
+    ],
+    "k_shape": [
+      11,
+      11
+    ],
+    "batch_size": 50,
+    "density": 0.001,
+    "mode": "same",
+    "winner": "direct+numba",
+    "winner_time": 0.00029224157333374023,
+    "all_times": {
+      "precomputed+numpy": 0.011659458605572583,
+      "precomputed+torch": 0.021867482969537378,
+      "lazy+numpy": 0.0009150916710495948,
+      "lazy+torch": 0.0024230921873822807,
+      "gather_scatter+numpy": 0.0020583577919751407,
+      "gather_scatter+numba": 0.0014253414003178476,
+      "gather_scatter+torch": 0.0023514749947935345,
+      "direct+numba": 0.00029224157333374023
+    }
+  },
+  {
+    "x_shape": [
+      50,
+      50
+    ],
+    "k_shape": [
+      11,
+      11
+    ],
+    "batch_size": 50,
+    "density": 0.01,
+    "mode": "same",
+    "winner": "direct+numba",
+    "winner_time": 0.0004663163563236594,
+    "all_times": {
+      "precomputed+numpy": 0.012091058213263749,
+      "precomputed+torch": 0.02027427500579506,
+      "lazy+numpy": 0.008530542021617293,
+      "lazy+torch": 0.007035508425906301,
+      "gather_scatter+numpy": 0.006514075002633035,
+      "gather_scatter+numba": 0.002946941810660064,
+      "gather_scatter+torch": 0.006897717178799213,
+      "direct+numba": 0.0004663163563236594
+    }
+  },
+  {
+    "x_shape": [
+      50,
+      50
+    ],
+    "k_shape": [
+      11,
+      11
+    ],
+    "batch_size": 50,
+    "density": 0.1,
+    "mode": "same",
+    "winner": "direct+numba",
+    "winner_time": 0.0015576498582959176,
+    "all_times": {
+      "precomputed+numpy": 0.01888117459602654,
+      "precomputed+torch": 0.020049116434529425,
+      "lazy+numpy": 0.08395252439659089,
+      "lazy+torch": 0.030396008188836275,
+      "gather_scatter+numpy": 0.03245665880385787,
+      "gather_scatter+numba": 0.004632799979299307,
+      "gather_scatter+torch": 0.02976058318745345,
+      "direct+numba": 0.0015576498582959176
+    }
+  },
+  {
+    "x_shape": [
+      50,
+      50
+    ],
+    "k_shape": [
+      11,
+      11
+    ],
+    "batch_size": 500,
+    "density": 0.001,
+    "mode": "same",
+    "winner": "direct+numba",
+    "winner_time": 0.000704791396856308,
+    "all_times": {
+      "precomputed+numpy": 0.011845966801047325,
+      "precomputed+torch": 0.07615411665756255,
+      "lazy+numpy": 0.005428366735577583,
+      "lazy+torch": 0.015562825393863023,
+      "gather_scatter+numpy": 0.016595308226533236,
+      "gather_scatter+numba": 0.010874117235653102,
+      "gather_scatter+torch": 0.015968841570429507,
+      "direct+numba": 0.000704791396856308
+    }
+  },
+  {
+    "x_shape": [
+      50,
+      50
+    ],
+    "k_shape": [
+      11,
+      11
+    ],
+    "batch_size": 500,
+    "density": 0.01,
+    "mode": "same",
+    "winner": "direct+numba",
+    "winner_time": 0.002459116326645017,
+    "all_times": {
+      "precomputed+numpy": 0.028265524399466814,
+      "precomputed+torch": 0.08474602522328496,
+      "lazy+numpy": 0.08623747520614417,
+      "lazy+torch": 0.04776357519440353,
+      "gather_scatter+numpy": 0.05601352516096085,
+      "gather_scatter+numba": 0.027453608019277452,
+      "gather_scatter+torch": 0.04823641641996801,
+      "direct+numba": 0.002459116326645017
+    }
+  },
+  {
+    "x_shape": [
+      50,
+      50
+    ],
+    "k_shape": [
+      11,
+      11
+    ],
+    "batch_size": 500,
+    "density": 0.1,
+    "mode": "same",
+    "winner": "direct+numba",
+    "winner_time": 0.018434582836925985,
+    "all_times": {
+      "precomputed+numpy": 0.06509045858401805,
+      "precomputed+torch": 0.09193444941192865,
+      "lazy+numpy": 0.8617338582174853,
+      "lazy+torch": 0.35200192497577515,
+      "gather_scatter+numpy": 0.517696175025776,
+      "gather_scatter+numba": 0.043448391999118034,
+      "gather_scatter+torch": 0.33763805821072307,
+      "direct+numba": 0.018434582836925985
+    }
+  },
+  {
+    "x_shape": [
+      100,
+      100
+    ],
+    "k_shape": [
+      5,
+      5
+    ],
+    "batch_size": 1,
+    "density": 0.001,
+    "mode": "same",
+    "winner": "gather_scatter+numba",
+    "winner_time": 0.00013679175172001123,
+    "all_times": {
+      "precomputed+numpy": 0.02548437484074384,
+      "precomputed+torch": 0.026387825002893807,
+      "lazy+numpy": 0.00018195838201791046,
+      "lazy+torch": 0.0003730996046215296,
+      "gather_scatter+numpy": 0.0005325252190232277,
+      "gather_scatter+numba": 0.00013679175172001123,
+      "gather_scatter+torch": 0.0003444827860221267,
+      "direct+numba": 0.00026829163543879987
+    }
+  },
+  {
+    "x_shape": [
+      100,
+      100
+    ],
+    "k_shape": [
+      5,
+      5
+    ],
+    "batch_size": 1,
+    "density": 0.01,
+    "mode": "same",
+    "winner": "lazy+numpy",
+    "winner_time": 0.0003373079700395465,
+    "all_times": {
+      "precomputed+numpy": 0.016273716208525003,
+      "precomputed+torch": 0.021170266601257027,
+      "lazy+numpy": 0.0003373079700395465,
+      "lazy+torch": 0.0005787667818367481,
+      "gather_scatter+numpy": 0.0003952417988330126,
+      "gather_scatter+numba": 0.0006519421935081482,
+      "gather_scatter+torch": 0.00048560015857219697,
+      "direct+numba": 0.000347424834035337
+    }
+  },
+  {
+    "x_shape": [
+      100,
+      100
+    ],
+    "k_shape": [
+      5,
+      5
+    ],
+    "batch_size": 1,
+    "density": 0.1,
+    "mode": "same",
+    "winner": "direct+numba",
+    "winner_time": 0.0008575669955462218,
+    "all_times": {
+      "precomputed+numpy": 0.017709358176216484,
+      "precomputed+torch": 0.024288191972300407,
+      "lazy+numpy": 0.003259424609132111,
+      "lazy+torch": 0.0024736501974985,
+      "gather_scatter+numpy": 0.0019369914429262281,
+      "gather_scatter+numba": 0.0009396499721333384,
+      "gather_scatter+torch": 0.0028644165955483917,
+      "direct+numba": 0.0008575669955462218
+    }
+  },
+  {
+    "x_shape": [
+      100,
+      100
+    ],
+    "k_shape": [
+      5,
+      5
+    ],
+    "batch_size": 50,
+    "density": 0.001,
+    "mode": "same",
+    "winner": "direct+numba",
+    "winner_time": 0.00045435840729624033,
+    "all_times": {
+      "precomputed+numpy": 0.018081274977885187,
+      "precomputed+torch": 0.03360701659694314,
+      "lazy+numpy": 0.0006737916031852364,
+      "lazy+torch": 0.006601608404889703,
+      "gather_scatter+numpy": 0.001754650240764022,
+      "gather_scatter+numba": 0.0009761666180565953,
+      "gather_scatter+torch": 0.006623408244922757,
+      "direct+numba": 0.00045435840729624033
+    }
+  },
+  {
+    "x_shape": [
+      100,
+      100
+    ],
+    "k_shape": [
+      5,
+      5
+    ],
+    "batch_size": 50,
+    "density": 0.01,
+    "mode": "same",
+    "winner": "direct+numba",
+    "winner_time": 0.0010219747899100186,
+    "all_times": {
+      "precomputed+numpy": 0.02118513297755271,
+      "precomputed+torch": 0.043127366830594836,
+      "lazy+numpy": 0.010545932990498842,
+      "lazy+torch": 0.01709318356588483,
+      "gather_scatter+numpy": 0.013975075003691018,
+      "gather_scatter+numba": 0.009490566817112267,
+      "gather_scatter+torch": 0.014126458181999623,
+      "direct+numba": 0.0010219747899100186
+    }
+  },
+  {
+    "x_shape": [
+      100,
+      100
+    ],
+    "k_shape": [
+      5,
+      5
+    ],
+    "batch_size": 50,
+    "density": 0.1,
+    "mode": "same",
+    "winner": "direct+numba",
+    "winner_time": 0.0019616082310676573,
+    "all_times": {
+      "precomputed+numpy": 0.042535300250165164,
+      "precomputed+torch": 0.05010709979105741,
+      "lazy+numpy": 0.12780536659993233,
+      "lazy+torch": 0.048368850257247686,
+      "gather_scatter+numpy": 0.04640109178144485,
+      "gather_scatter+numba": 0.018059541611000894,
+      "gather_scatter+torch": 0.040246049570851025,
+      "direct+numba": 0.0019616082310676573
+    }
+  },
+  {
+    "x_shape": [
+      100,
+      100
+    ],
+    "k_shape": [
+      5,
+      5
+    ],
+    "batch_size": 500,
+    "density": 0.001,
+    "mode": "same",
+    "winner": "direct+numba",
+    "winner_time": 0.0019410082139074802,
+    "all_times": {
+      "precomputed+numpy": 0.01796736679971218,
+      "precomputed+torch": 0.11790970002766699,
+      "lazy+numpy": 0.004453283594921232,
+      "lazy+torch": 0.044260442000813784,
+      "gather_scatter+numpy": 0.011190658435225487,
+      "gather_scatter+numba": 0.0076560583664104336,
+      "gather_scatter+torch": 0.04493059143424034,
+      "direct+numba": 0.0019410082139074802
+    }
+  },
+  {
+    "x_shape": [
+      100,
+      100
+    ],
+    "k_shape": [
+      5,
+      5
+    ],
+    "batch_size": 500,
+    "density": 0.01,
+    "mode": "same",
+    "winner": "direct+numba",
+    "winner_time": 0.005156191764399409,
+    "all_times": {
+      "precomputed+numpy": 0.03645617482252419,
+      "precomputed+torch": 0.1768103081965819,
+      "lazy+numpy": 0.08189924978651106,
+      "lazy+torch": 0.10975266699679195,
+      "gather_scatter+numpy": 0.09409979139454662,
+      "gather_scatter+numba": 0.06534331680741161,
+      "gather_scatter+torch": 0.09317013323307037,
+      "direct+numba": 0.005156191764399409
+    }
+  },
+  {
+    "x_shape": [
+      100,
+      100
+    ],
+    "k_shape": [
+      5,
+      5
+    ],
+    "batch_size": 500,
+    "density": 0.1,
+    "mode": "same",
+    "winner": "direct+numba",
+    "winner_time": 0.020704291830770674,
+    "all_times": {
+      "precomputed+numpy": 0.17673290006350728,
+      "precomputed+torch": 0.25468627500813457,
+      "lazy+numpy": 1.0782920916564762,
+      "lazy+torch": 0.42545486597809945,
+      "gather_scatter+numpy": 0.5997073496226221,
+      "gather_scatter+numba": 0.16169365840032698,
+      "gather_scatter+torch": 0.4821180663770065,
+      "direct+numba": 0.020704291830770674
+    }
+  },
+  {
+    "x_shape": [
+      100,
+      100
+    ],
+    "k_shape": [
+      11,
+      11
+    ],
+    "batch_size": 1,
+    "density": 0.001,
+    "mode": "same",
+    "winner": "lazy+numpy",
+    "winner_time": 0.00023705901112407448,
+    "all_times": {
+      "precomputed+numpy": 0.04255232496652752,
+      "precomputed+torch": 0.06046017478220165,
+      "lazy+numpy": 0.00023705901112407448,
+      "lazy+torch": 0.00044635017402470115,
+      "gather_scatter+numpy": 0.0003482919884845615,
+      "gather_scatter+numba": 0.00044399178586900233,
+      "gather_scatter+torch": 0.00048600023146718737,
+      "direct+numba": 0.00028034176211804156
+    }
+  },
+  {
+    "x_shape": [
+      100,
+      100
+    ],
+    "k_shape": [
+      11,
+      11
+    ],
+    "batch_size": 1,
+    "density": 0.01,
+    "mode": "same",
+    "winner": "direct+numba",
+    "winner_time": 0.0003242997918277979,
+    "all_times": {
+      "precomputed+numpy": 0.04588176680263132,
+      "precomputed+torch": 0.05539235023315996,
+      "lazy+numpy": 0.0010476916097104548,
+      "lazy+torch": 0.0015561166452243923,
+      "gather_scatter+numpy": 0.0009812166215851905,
+      "gather_scatter+numba": 0.0007802081992849707,
+      "gather_scatter+torch": 0.0018026416189968588,
+      "direct+numba": 0.0003242997918277979
+    }
+  },
+  {
+    "x_shape": [
+      100,
+      100
+    ],
+    "k_shape": [
+      11,
+      11
+    ],
+    "batch_size": 1,
+    "density": 0.1,
+    "mode": "same",
+    "winner": "direct+numba",
+    "winner_time": 0.0007966670207679271,
+    "all_times": {
+      "precomputed+numpy": 0.0339805917814374,
+      "precomputed+torch": 0.05692545000929386,
+      "lazy+numpy": 0.011786066391505302,
+      "lazy+torch": 0.005178650026209652,
+      "gather_scatter+numpy": 0.003978558769449592,
+      "gather_scatter+numba": 0.0009761586552485824,
+      "gather_scatter+torch": 0.005864033382385969,
+      "direct+numba": 0.0007966670207679271
+    }
+  },
+  {
+    "x_shape": [
+      100,
+      100
+    ],
+    "k_shape": [
+      11,
+      11
+    ],
+    "batch_size": 50,
+    "density": 0.001,
+    "mode": "same",
+    "winner": "direct+numba",
+    "winner_time": 0.0008977580349892378,
+    "all_times": {
+      "precomputed+numpy": 0.034103883407078685,
+      "precomputed+torch": 0.0825202165869996,
+      "lazy+numpy": 0.004711141414009035,
+      "lazy+torch": 0.010754349548369646,
+      "gather_scatter+numpy": 0.008388966997154058,
+      "gather_scatter+numba": 0.00594998358283192,
+      "gather_scatter+torch": 0.011472791596315802,
+      "direct+numba": 0.0008977580349892378
+    }
+  },
+  {
+    "x_shape": [
+      100,
+      100
+    ],
+    "k_shape": [
+      11,
+      11
+    ],
+    "batch_size": 50,
+    "density": 0.01,
+    "mode": "same",
+    "winner": "direct+numba",
+    "winner_time": 0.0017105836188420654,
+    "all_times": {
+      "precomputed+numpy": 0.05337419165298343,
+      "precomputed+torch": 0.09204736659303307,
+      "lazy+numpy": 0.051237216615118084,
+      "lazy+torch": 0.03311703319195658,
+      "gather_scatter+numpy": 0.03281200022902339,
+      "gather_scatter+numba": 0.016520883399061857,
+      "gather_scatter+torch": 0.03332709141541272,
+      "direct+numba": 0.0017105836188420654
+    }
+  },
+  {
+    "x_shape": [
+      100,
+      100
+    ],
+    "k_shape": [
+      11,
+      11
+    ],
+    "batch_size": 50,
+    "density": 0.1,
+    "mode": "same",
+    "winner": "direct+numba",
+    "winner_time": 0.020344200381077825,
+    "all_times": {
+      "precomputed+numpy": 0.08125425856560468,
+      "precomputed+torch": 0.09587288319598883,
+      "lazy+numpy": 0.6634952165652066,
+      "lazy+torch": 0.4235715165734291,
+      "gather_scatter+numpy": 0.5471737247891724,
+      "gather_scatter+numba": 0.041253650002181536,
+      "gather_scatter+torch": 0.405978383589536,
+      "direct+numba": 0.020344200381077825
+    }
+  },
+  {
+    "x_shape": [
+      100,
+      100
+    ],
+    "k_shape": [
+      11,
+      11
+    ],
+    "batch_size": 500,
+    "density": 0.001,
+    "mode": "same",
+    "winner": "direct+numba",
+    "winner_time": 0.014736991608515382,
+    "all_times": {
+      "precomputed+numpy": 0.0904226333834231,
+      "precomputed+torch": 0.8509265667991713,
+      "lazy+numpy": 0.059694199729710816,
+      "lazy+torch": 0.16170831699855626,
+      "gather_scatter+numpy": 0.17478215862065552,
+      "gather_scatter+numba": 0.12295406681951136,
+      "gather_scatter+torch": 0.19555469199549408,
+      "direct+numba": 0.014736991608515382
+    }
+  },
+  {
+    "x_shape": [
+      100,
+      100
+    ],
+    "k_shape": [
+      11,
+      11
+    ],
+    "batch_size": 500,
+    "density": 0.01,
+    "mode": "same",
+    "winner": "direct+numba",
+    "winner_time": 0.027359383227303625,
+    "all_times": {
+      "precomputed+numpy": 0.23121518359985202,
+      "precomputed+torch": 0.9355255749775097,
+      "lazy+numpy": 0.6931733998004347,
+      "lazy+torch": 0.5047275583958253,
+      "gather_scatter+numpy": 0.9644577004015447,
+      "gather_scatter+numba": 0.20529801642987877,
+      "gather_scatter+torch": 0.474725816398859,
+      "direct+numba": 0.027359383227303625
+    }
+  },
+  {
+    "x_shape": [
+      100,
+      100
+    ],
+    "k_shape": [
+      11,
+      11
+    ],
+    "batch_size": 500,
+    "density": 0.1,
+    "mode": "same",
+    "winner": "direct+numba",
+    "winner_time": 0.04338274165056646,
+    "all_times": {
+      "precomputed+numpy": 0.48592709165532144,
+      "precomputed+torch": 0.784231791133061,
+      "lazy+numpy": 4.715905000176281,
+      "lazy+torch": 1.7071473999880256,
+      "gather_scatter+numpy": 1.9369086249731482,
+      "gather_scatter+numba": 0.16136410881299526,
+      "gather_scatter+torch": 1.6627125083701684,
+      "direct+numba": 0.04338274165056646
+    }
+  }
+]
