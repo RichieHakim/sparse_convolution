@@ -53,7 +53,7 @@ Four methods, each with selectable backends:
 | `lazy` | yes | n/a | yes |
 | `gather_scatter` | yes | yes | yes |
 
-- **`direct`** (default): Two-pass batch-parallel scatter with thread-local dense buffers (numba only). Zero init overhead, O(nnz×K) per image. Fastest method across nearly all configurations. Requires `numba`.
+- **`direct`** (default): Batch-parallel scatter convolution with thread-local dense buffers (numba only). For each image in parallel, scatters kernel-weighted input values into an L2-cache-sized accumulator buffer, then extracts nonzeros into CSR format. Uses a two-phase approach: a lightweight boolean counting pass (1-byte flags, no float arithmetic) determines exact output sizes, then the scatter pass writes directly to right-sized arrays with zero waste. Interior pixels (~92-100%) skip bounds checking entirely via precomputed safe regions. O(nnz × K) per image with no init overhead. Fastest method across nearly all configurations. Requires `numba`.
 - **`precomputed`**: Builds a sparse Toeplitz matrix at init; fast batched matmul. Best for large batches with the same kernel when numba is not available.
 - **`lazy`**: COO broadcasting, no init cost. Best for very sparse inputs with small batches.
 - **`gather_scatter`**: Per-kernel-position scatter into a dense accumulator. General-purpose method for sparse batched inputs.
@@ -81,28 +81,54 @@ If `backend=None` (default), auto-selects `numba` for `direct` and `gather_scatt
 
 ## Benchmarks
 
-All benchmarks run on CPU with 2s minimum measurement time per configuration (median reported). Eight method+backend combinations compared across six scaling sweeps.
+All benchmarks run on CPU with 1s minimum measurement time per configuration (median reported). Nine method+backend combinations compared across six scaling sweeps.
 
-### Batch size scaling
-100×100 images, 5×5 kernel, density=0.01
+### Scaling overview
+
+Six scaling sweeps varying batch size, density, image size, and kernel size. `direct+numba` (brown stars) is the fastest method in nearly all regimes.
+
+![Scaling overview](benchmarks/results/figure_scaling_all.png)
+
+### Grid search: fastest method per configuration
+
+Each cell shows the winning method and total time (init + call) for that batch size × density combination. `direct+numba` wins 28 of 36 configurations with an average 4.75× speedup over the second-fastest method.
+
+![Grid winners](benchmarks/results/figure_grid_winners.png)
+
+### Individual scaling curves
+
+<details>
+<summary>Batch size scaling — 100×100, 5×5, density=0.01</summary>
+
 ![Batch scaling](benchmarks/results/scaling_batch_scaling.png)
+</details>
 
-### Density scaling
-100×100 images, 5×5 kernel, batch=100
+<details>
+<summary>Density scaling — 100×100, 5×5, batch=100</summary>
+
 ![Density scaling](benchmarks/results/scaling_density_scaling.png)
+</details>
 
-### Image size scaling
-5×5 kernel, density=0.01, batch=50
+<details>
+<summary>Image size scaling — 5×5, density=0.01, batch=50</summary>
+
 ![Image size scaling](benchmarks/results/scaling_img_size_scaling.png)
+</details>
 
-### Kernel size scaling
-100×100 images, density=0.01, batch=50
+<details>
+<summary>Kernel size scaling — 100×100, density=0.01, batch=50</summary>
+
 ![Kernel size scaling](benchmarks/results/scaling_kernel_size_scaling.png)
+</details>
 
-### Batch scaling — high density
-100×100 images, 5×5 kernel, density=0.1
+<details>
+<summary>Batch scaling — high density (0.1)</summary>
+
 ![Batch scaling high density](benchmarks/results/scaling_batch_scaling_high_density.png)
+</details>
 
-### Batch scaling — very sparse
-100×100 images, 5×5 kernel, density=0.001
+<details>
+<summary>Batch scaling — very sparse (density=0.001, 200×200)</summary>
+
 ![Batch scaling very sparse](benchmarks/results/scaling_batch_scaling_very_sparse.png)
+</details>

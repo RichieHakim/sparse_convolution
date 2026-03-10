@@ -74,6 +74,7 @@ METHOD_COLORS = {
     'gather_scatter+numpy':   '#d62728',  ## red
     'gather_scatter+numba':   '#ff7f0e',  ## orange
     'gather_scatter+torch':   '#ffbb78',  ## light orange
+    'direct+numba':           '#8c564b',  ## brown
     'precomputed+torch+cuda': '#9467bd',  ## purple
     'lazy+torch+cuda':        '#c5b0d5',  ## light purple
     'gather_scatter+torch+cuda': '#e377c2',  ## pink
@@ -87,6 +88,7 @@ METHOD_MARKERS = {
     'gather_scatter+numpy':   'o',
     'gather_scatter+numba':   'D',
     'gather_scatter+torch':   'o',
+    'direct+numba':           '*',
 }
 
 SWEEP_TITLES = {

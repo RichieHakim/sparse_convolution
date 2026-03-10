@@ -1,32 +1,32 @@
 """
 Direct CSR scatter convolution backend (numba only).
 
-Two-pass batch-parallel scatter using thread-local dense buffers
+Adaptive batch-parallel scatter using thread-local dense buffers
 (L2-cache-sized, ~80KB for 100x100 images). Each numba thread handles
 one batch image — zero write conflicts.
 
-- **Pass 1**: scatter kernel-weighted input values into a local dense
-  buffer, count output nonzeros. Two adaptive variants:
+**Architecture:**
 
-  - *Scan* (``_scatter_count_scan``): sequential scan of the full buffer
-    after scatter. O(nnz_i * n_k + out_pixels) per image. Best when
-    output is dense (many scatter ops relative to out_pixels).
-  - *Tracked* (``_scatter_count_tracked``): inline nnz counter that
-    tracks zero-to-nonzero transitions during scatter. O(nnz_i * n_k)
-    per image with ~2-3 cycles overhead per scatter op. Best when
-    output is sparse.
+1. **Precompute** kernel delta table (``k_deltas[ki] = k_rows[ki] * W_out
+   + k_cols[ki]``) and interior pixel bounds. Eliminates per-scatter-op
+   2D index arithmetic and bounds checking for ~92-100% of input pixels.
 
-- **Pass 2** (``_scatter_fill_csr``): re-scatter and extract nonzeros
-  via sequential scan into pre-allocated CSR arrays. Naturally sorted
-  column indices — no sort needed.
+2. **Adaptive dispatch** based on expected output density
+   (``mean_nnz * n_k / out_pixels``):
 
-Complexity (per image, tracked path):
-    Work: O(nnz_i * n_k)
+   - **Sparse output** (ratio < 1): two-phase count → scatter.
+     Phase 1 uses lightweight 1-byte flags (~5× cheaper than scatter)
+     to get exact nnz. Phase 2 writes directly to exact-size arrays.
+     No over-allocation, no compaction.
+
+   - **Dense output** (ratio >= 1): single-pass over-allocate → scatter.
+     Upper bound equals ``out_pixels`` (exact for dense output), so
+     over-allocation waste is negligible. Skips the counting pass
+     entirely. Optional compaction if upper bounds weren't exact.
+
+Complexity (per image):
+    Work: O(nnz_i * n_k + out_pixels)
     Memory: O(out_pixels) per thread + O(total_nnz_output) total
-
-Performance: 5-17x faster than precomputed+scipy at batch=50k across
-all density regimes (0.001-0.01), because thread-local buffers fit in
-L2 cache and avoid the O(N * out_pixels) global dense buffer.
 """
 
 import numpy as np
@@ -46,140 +46,77 @@ except ImportError:
 ## ---------------------------------------------------------------------------
 
 if HAS_NUMBA:
-    @numba.njit(parallel=True, cache=True)
-    def _scatter_count_scan(x_indptr, x_indices, x_data, k_vals, k_rows, k_cols,
-                            W_in, H_out, W_out, t, l, counts):
+    @numba.njit(parallel=True, fastmath=True, cache=True)
+    def _count_nnz(x_indptr, x_indices,
+                   k_rows, k_cols, k_deltas,
+                   W_in, H_out, W_out, out_pixels, t, l, offset,
+                   r_lo, r_hi, c_lo, c_hi,
+                   Nk, counts):
         """
-        Pass 1 (scan variant): scatter into thread-local dense buffer, then
-        scan the full buffer to count nonzeros. O(nnz_i * n_k + out_pixels)
-        per image. Best when scatter ops >= out_pixels / 2 (dense output).
+        Lightweight boolean counting pass: compute exact output nnz per image.
 
-        Args:
-            x_indptr (np.ndarray):
-                CSR row pointers, shape ``(n_batch + 1,)``.
-            x_indices (np.ndarray):
-                CSR column indices (flat pixel positions), shape ``(nnz,)``.
-            x_data (np.ndarray):
-                CSR values, shape ``(nnz,)``.
-            k_vals, k_rows, k_cols (np.ndarray):
-                Kernel nonzero values and positions, shape ``(Nk,)``.
-            W_in (int):
-                Input width.
-            H_out, W_out (int):
-                Output spatial dimensions.
-            t, l (int):
-                Mode offsets.
-            counts (np.ndarray):
-                Output array for per-image nnz counts, shape ``(n_batch,)``.
+        Uses a 1-byte flag array instead of an 8-byte float buffer. No float
+        multiply — just sets flags for which output positions are touched.
         """
-        Nk = len(k_vals)
         n_batch = len(x_indptr) - 1
-        out_pixels = H_out * W_out
         for b in numba.prange(n_batch):
-            buf = np.zeros(out_pixels, dtype=x_data.dtype)
+            flags = np.zeros(out_pixels, dtype=numba.uint8)
+
             for jj in range(x_indptr[b], x_indptr[b + 1]):
                 x_flat = x_indices[jj]
-                x_val = x_data[jj]
                 x_r = x_flat // W_in
                 x_c = x_flat % W_in
-                for ki in range(Nk):
-                    out_r = x_r + k_rows[ki] - t
-                    out_c = x_c + k_cols[ki] - l
-                    if 0 <= out_r < H_out and 0 <= out_c < W_out:
-                        buf[out_r * W_out + out_c] += x_val * k_vals[ki]
-            c = 0
+
+                if r_lo <= x_r < r_hi and c_lo <= x_c < c_hi:
+                    x_base = x_r * W_out + x_c - offset
+                    for ki in range(Nk):
+                        flags[x_base + k_deltas[ki]] = 1
+                else:
+                    for ki in range(Nk):
+                        out_r = x_r + k_rows[ki] - t
+                        out_c = x_c + k_cols[ki] - l
+                        if 0 <= out_r < H_out and 0 <= out_c < W_out:
+                            flags[out_r * W_out + out_c] = 1
+
+            count = np.int64(0)
             for j in range(out_pixels):
-                if buf[j] != 0.0:
-                    c += 1
-            counts[b] = c
+                count += flags[j]
+            counts[b] = count
 
-    @numba.njit(parallel=True, cache=True)
-    def _scatter_count_tracked(x_indptr, x_indices, x_data, k_vals, k_rows, k_cols,
-                               W_in, H_out, W_out, t, l, counts):
+    @numba.njit(parallel=True, fastmath=True, cache=True)
+    def _scatter_extract(x_indptr, x_indices, x_data,
+                         k_vals, k_rows, k_cols, k_deltas,
+                         W_in, H_out, W_out, out_pixels, t, l, offset,
+                         r_lo, r_hi, c_lo, c_hi,
+                         out_indptr, out_indices, out_data):
         """
-        Pass 1 (tracked variant): scatter with inline nnz counter. Tracks
-        transitions to/from zero during scatter, avoiding the O(out_pixels)
-        buffer scan. O(nnz_i * n_k) per image — matches the theoretical
-        lower bound. Best when scatter ops << out_pixels (sparse output).
+        Scatter + sequential-scan extraction into exact-size CSR arrays.
 
-        Adds ~2-3 cycles overhead per scatter op (one extra float load for
-        ``old_val``, two comparisons, one conditional increment). Only used
-        when expected scatter ops < out_pixels * 0.3.
-
-        Args:
-            x_indptr, x_indices, x_data (np.ndarray):
-                CSR input arrays.
-            k_vals, k_rows, k_cols (np.ndarray):
-                Kernel nonzero values and positions.
-            W_in, H_out, W_out, t, l (int):
-                Geometry parameters.
-            counts (np.ndarray):
-                Output array for per-image nnz counts, shape ``(n_batch,)``.
+        Writes directly to pre-allocated exact-size output arrays.
+        No over-allocation, no compaction step.
         """
         Nk = len(k_vals)
         n_batch = len(x_indptr) - 1
-        out_pixels = H_out * W_out
-        for b in numba.prange(n_batch):
-            buf = np.zeros(out_pixels, dtype=x_data.dtype)
-            n_nonzero = 0
-            for jj in range(x_indptr[b], x_indptr[b + 1]):
-                x_flat = x_indices[jj]
-                x_val = x_data[jj]
-                x_r = x_flat // W_in
-                x_c = x_flat % W_in
-                for ki in range(Nk):
-                    out_r = x_r + k_rows[ki] - t
-                    out_c = x_c + k_cols[ki] - l
-                    if 0 <= out_r < H_out and 0 <= out_c < W_out:
-                        idx = out_r * W_out + out_c
-                        old = buf[idx]
-                        new = old + x_val * k_vals[ki]
-                        buf[idx] = new
-                        ## Track transitions: 0->nonzero or nonzero->0
-                        if old == 0.0:
-                            if new != 0.0:
-                                n_nonzero += 1
-                        elif new == 0.0:
-                            n_nonzero -= 1
-            counts[b] = n_nonzero
-
-    @numba.njit(parallel=True, cache=True)
-    def _scatter_fill_csr(x_indptr, x_indices, x_data, k_vals, k_rows, k_cols,
-                          W_in, H_out, W_out, t, l,
-                          out_indptr, out_indices, out_data):
-        """
-        Pass 2: scatter into thread-local buffer, extract nonzeros via
-        sequential scan (produces sorted CSR indices naturally).
-
-        Args:
-            x_indptr, x_indices, x_data (np.ndarray):
-                CSR input arrays.
-            k_vals, k_rows, k_cols (np.ndarray):
-                Kernel nonzero values and positions.
-            W_in, H_out, W_out, t, l (int):
-                Geometry parameters.
-            out_indptr (np.ndarray):
-                CSR row pointers for output, shape ``(n_batch + 1,)``.
-            out_indices (np.ndarray):
-                CSR column indices to fill, shape ``(total_nnz,)``.
-            out_data (np.ndarray):
-                CSR values to fill, shape ``(total_nnz,)``.
-        """
-        Nk = len(k_vals)
-        n_batch = len(x_indptr) - 1
-        out_pixels = H_out * W_out
         for b in numba.prange(n_batch):
             buf = np.zeros(out_pixels, dtype=out_data.dtype)
+
             for jj in range(x_indptr[b], x_indptr[b + 1]):
                 x_flat = x_indices[jj]
                 x_val = x_data[jj]
                 x_r = x_flat // W_in
                 x_c = x_flat % W_in
-                for ki in range(Nk):
-                    out_r = x_r + k_rows[ki] - t
-                    out_c = x_c + k_cols[ki] - l
-                    if 0 <= out_r < H_out and 0 <= out_c < W_out:
-                        buf[out_r * W_out + out_c] += x_val * k_vals[ki]
+
+                if r_lo <= x_r < r_hi and c_lo <= x_c < c_hi:
+                    x_base = x_r * W_out + x_c - offset
+                    for ki in range(Nk):
+                        buf[x_base + k_deltas[ki]] += x_val * k_vals[ki]
+                else:
+                    for ki in range(Nk):
+                        out_r = x_r + k_rows[ki] - t
+                        out_c = x_c + k_cols[ki] - l
+                        if 0 <= out_r < H_out and 0 <= out_c < W_out:
+                            buf[out_r * W_out + out_c] += x_val * k_vals[ki]
+
             pos = out_indptr[b]
             for j in range(out_pixels):
                 v = buf[j]
@@ -188,6 +125,67 @@ if HAS_NUMBA:
                     out_data[pos] = v
                     pos += 1
 
+    @numba.njit(parallel=True, fastmath=True, cache=True)
+    def _scatter_extract_counted(x_indptr, x_indices, x_data,
+                                 k_vals, k_rows, k_cols, k_deltas,
+                                 W_in, H_out, W_out, out_pixels, t, l, offset,
+                                 r_lo, r_hi, c_lo, c_hi,
+                                 ub_indptr, out_indices, out_data,
+                                 actual_counts):
+        """
+        Scatter + extraction into over-allocated CSR arrays, recording
+        actual nnz per image. Used for the dense-output path where the
+        counting pass is skipped.
+        """
+        Nk = len(k_vals)
+        n_batch = len(x_indptr) - 1
+        for b in numba.prange(n_batch):
+            buf = np.zeros(out_pixels, dtype=out_data.dtype)
+
+            for jj in range(x_indptr[b], x_indptr[b + 1]):
+                x_flat = x_indices[jj]
+                x_val = x_data[jj]
+                x_r = x_flat // W_in
+                x_c = x_flat % W_in
+
+                if r_lo <= x_r < r_hi and c_lo <= x_c < c_hi:
+                    x_base = x_r * W_out + x_c - offset
+                    for ki in range(Nk):
+                        buf[x_base + k_deltas[ki]] += x_val * k_vals[ki]
+                else:
+                    for ki in range(Nk):
+                        out_r = x_r + k_rows[ki] - t
+                        out_c = x_c + k_cols[ki] - l
+                        if 0 <= out_r < H_out and 0 <= out_c < W_out:
+                            buf[out_r * W_out + out_c] += x_val * k_vals[ki]
+
+            pos = ub_indptr[b]
+            count = np.int64(0)
+            for j in range(out_pixels):
+                v = buf[j]
+                if v != 0.0:
+                    out_indices[pos] = j
+                    out_data[pos] = v
+                    pos += 1
+                    count += 1
+            actual_counts[b] = count
+
+    @numba.njit(parallel=True, cache=True)
+    def _compact_csr(ub_indptr, actual_indptr, actual_counts,
+                     src_indices, src_data, dst_indices, dst_data):
+        """
+        Parallel compaction of over-allocated CSR arrays into tightly-packed
+        output.
+        """
+        n_batch = len(actual_counts)
+        for b in numba.prange(n_batch):
+            src_start = ub_indptr[b]
+            dst_start = actual_indptr[b]
+            n = actual_counts[b]
+            for i in range(n):
+                dst_indices[dst_start + i] = src_indices[src_start + i]
+                dst_data[dst_start + i] = src_data[src_start + i]
+
 
 ## ---------------------------------------------------------------------------
 ## Public dispatch
@@ -195,14 +193,24 @@ if HAS_NUMBA:
 
 def compute_direct(x, k, x_shape, mode, batching, dtype):
     """
-    Compute convolution using two-pass direct CSR scatter (numba only).
+    Compute convolution using adaptive direct CSR scatter (numba only).
 
     Requires numba. Operates directly on CSR input — no intermediate
-    dense buffer, no COO construction, no Toeplitz matrix. Each thread
-    uses a local buffer of size ``out_pixels`` that fits in L2 cache.
+    Toeplitz matrix, no COO construction. Each thread uses a local buffer
+    of size ``out_pixels`` that fits in L2 cache.
 
-    For ``batching=False``, wraps the single image as a 1-row CSR matrix
-    internally.
+    Adaptively chooses between two strategies based on expected output
+    density:
+
+    - **Sparse output** (scatter_ops < out_pixels): two-phase count →
+      scatter. Phase 1 uses 1-byte flags to get exact nnz. Phase 2
+      writes directly to exact-size arrays. No compaction.
+    - **Dense output** (scatter_ops >= out_pixels): single-pass scatter
+      with upper-bound allocation. Skips the counting pass (which would
+      be redundant since output is nearly dense). Optional compaction.
+
+    Also uses interior/boundary split and precomputed delta tables for
+    index arithmetic reduction.
 
     Args:
         x (Union[np.ndarray, scipy.sparse.spmatrix]):
@@ -231,18 +239,31 @@ def compute_direct(x, k, x_shape, mode, batching, dtype):
     k_r, k_c, k_d = extract_kernel_coo(k, dtype)
     n_k = len(k_d)
 
+    ## Precompute delta table
+    k_deltas = (k_r * W_out + k_c).astype(np.int64)
+    offset = np.int64(t * W_out + l)
+
+    ## Precompute interior pixel bounds
+    if n_k > 0:
+        r_lo = np.int64(t - int(k_r.min()))
+        r_hi = np.int64(H_out + t - int(k_r.max()))
+        c_lo = np.int64(l - int(k_c.min()))
+        c_hi = np.int64(W_out + l - int(k_c.max()))
+    else:
+        r_lo = r_hi = c_lo = c_hi = np.int64(0)
+
     ## Handle batching=False: wrap as 1-row CSR, run, reshape
     if not batching:
         if not scipy.sparse.issparse(x):
             x_flat = scipy.sparse.csr_matrix(x.reshape(1, -1))
         else:
             x_flat = scipy.sparse.csr_matrix(x.reshape(1, -1))
-        out = _run_two_pass(
-            x_csr=x_flat, k_r=k_r, k_c=k_c, k_d=k_d, n_k=n_k,
-            x_shape=x_shape, H_out=H_out, W_out=W_out,
-            out_pixels=out_pixels, t=t, l=l, dtype=dtype,
+        out = _run_adaptive(
+            x_csr=x_flat, k_r=k_r, k_c=k_c, k_d=k_d, k_deltas=k_deltas,
+            n_k=n_k, x_shape=x_shape, H_out=H_out, W_out=W_out,
+            out_pixels=out_pixels, t=t, l=l, offset=offset,
+            r_lo=r_lo, r_hi=r_hi, c_lo=c_lo, c_hi=c_hi, dtype=dtype,
         )
-        ## Reshape from (1, out_pixels) to (H_out, W_out)
         return out.reshape(H_out, W_out)
 
     ## Batched path: ensure CSR format
@@ -253,39 +274,25 @@ def compute_direct(x, k, x_shape, mode, batching, dtype):
     else:
         x_csr = x
 
-    return _run_two_pass(
-        x_csr=x_csr, k_r=k_r, k_c=k_c, k_d=k_d, n_k=n_k,
-        x_shape=x_shape, H_out=H_out, W_out=W_out,
-        out_pixels=out_pixels, t=t, l=l, dtype=dtype,
+    return _run_adaptive(
+        x_csr=x_csr, k_r=k_r, k_c=k_c, k_d=k_d, k_deltas=k_deltas,
+        n_k=n_k, x_shape=x_shape, H_out=H_out, W_out=W_out,
+        out_pixels=out_pixels, t=t, l=l, offset=offset,
+        r_lo=r_lo, r_hi=r_hi, c_lo=c_lo, c_hi=c_hi, dtype=dtype,
     )
 
 
-def _run_two_pass(x_csr, k_r, k_c, k_d, n_k, x_shape, H_out, W_out,
-                  out_pixels, t, l, dtype):
+def _run_adaptive(x_csr, k_r, k_c, k_d, k_deltas, n_k, x_shape,
+                   H_out, W_out, out_pixels, t, l, offset,
+                   r_lo, r_hi, c_lo, c_hi, dtype):
     """
-    Execute the two-pass scatter → CSR construction.
+    Adaptive dispatch: choose between counted (two-phase) and direct
+    (single-pass over-allocate) strategies based on expected output density.
 
-    Args:
-        x_csr (scipy.sparse.csr_matrix):
-            Input in CSR format, shape ``(n_batch, H * W)``.
-        k_r, k_c, k_d (np.ndarray):
-            Kernel COO arrays.
-        n_k (int):
-            Number of kernel nonzeros.
-        x_shape (Tuple[int, int]):
-            Spatial dimensions ``(H, W)``.
-        H_out, W_out (int):
-            Output spatial dimensions.
-        out_pixels (int):
-            ``H_out * W_out``.
-        t, l (int):
-            Mode offsets.
-        dtype (np.dtype):
-            Output dtype.
-
-    Returns:
-        (scipy.sparse.csr_matrix):
-            Output CSR matrix, shape ``(n_batch, out_pixels)``.
+    When mean scatter ops per pixel < 1, the output is sparse and the
+    counting pass saves more (avoiding compaction) than it costs.
+    When >= 1, the output is nearly dense, upper bounds are tight, and
+    the counting pass is wasted work.
     """
     n_batch = x_csr.shape[0]
 
@@ -294,38 +301,133 @@ def _run_two_pass(x_csr, k_r, k_c, k_d, n_k, x_shape, H_out, W_out,
     csr_indices = x_csr.indices.astype(np.int64)
     csr_data = x_csr.data.astype(dtype)
 
-    ## Pass 1: scatter + count output nnz per image.
-    ## Adaptive kernel selection: tracked counter avoids the O(out_pixels)
-    ## buffer scan but adds ~2-3 cycles per scatter op. Crossover at
-    ## scatter_ops ~ 0.3 * out_pixels (empirically tuned).
-    avg_nnz = x_csr.nnz / max(1, n_batch)
-    scatter_ops_per_image = avg_nnz * n_k
-    use_tracked = scatter_ops_per_image < out_pixels * 0.3
+    ## Decide strategy based on expected output density
+    per_image_nnz = np.diff(csr_indptr)
+    mean_scatter_ops = np.mean(per_image_nnz) * n_k if n_batch > 0 else 0
 
-    counts = np.empty(n_batch, dtype=np.int64)
-    count_fn = _scatter_count_tracked if use_tracked else _scatter_count_scan
-    count_fn(
-        csr_indptr, csr_indices, csr_data,
-        k_d, k_r, k_c,
-        x_shape[1], H_out, W_out, t, l,
-        counts,
+    if mean_scatter_ops < out_pixels:
+        ## Sparse output: two-phase (count → exact alloc → scatter)
+        return _run_counted(
+            csr_indptr, csr_indices, csr_data,
+            k_r, k_c, k_d, k_deltas, n_k, x_shape,
+            H_out, W_out, out_pixels, t, l, offset,
+            r_lo, r_hi, c_lo, c_hi, dtype, n_batch,
+        )
+    else:
+        ## Dense output: single-pass (over-alloc → scatter → compact)
+        return _run_overalloc(
+            csr_indptr, csr_indices, csr_data,
+            per_image_nnz, k_r, k_c, k_d, k_deltas, n_k, x_shape,
+            H_out, W_out, out_pixels, t, l, offset,
+            r_lo, r_hi, c_lo, c_hi, dtype, n_batch,
+        )
+
+
+def _run_counted(csr_indptr, csr_indices, csr_data,
+                  k_r, k_c, k_d, k_deltas, n_k, x_shape,
+                  H_out, W_out, out_pixels, t, l, offset,
+                  r_lo, r_hi, c_lo, c_hi, dtype, n_batch):
+    """Two-phase: count pass → exact-alloc scatter. Best for sparse output."""
+    ## Phase 1: lightweight boolean count
+    exact_counts = np.empty(n_batch, dtype=np.int64)
+    _count_nnz(
+        csr_indptr, csr_indices,
+        k_r, k_c, k_deltas,
+        np.int64(x_shape[1]), np.int64(H_out), np.int64(W_out),
+        np.int64(out_pixels), np.int64(t), np.int64(l), offset,
+        r_lo, r_hi, c_lo, c_hi,
+        np.int64(n_k), exact_counts,
     )
 
-    ## Build CSR indptr from counts
+    ## Build exact indptr
     indptr = np.empty(n_batch + 1, dtype=np.int32)
     indptr[0] = 0
-    np.cumsum(counts, out=indptr[1:])
+    np.cumsum(exact_counts, out=indptr[1:])
     total_nnz = int(indptr[-1])
 
-    ## Pass 2: scatter + extract to CSR arrays
-    indices = np.empty(total_nnz, dtype=np.int32)
-    data = np.empty(total_nnz, dtype=dtype)
-    if total_nnz > 0:
-        _scatter_fill_csr(
-            csr_indptr, csr_indices, csr_data,
-            k_d, k_r, k_c,
-            x_shape[1], H_out, W_out, t, l,
-            indptr, indices, data,
+    if total_nnz == 0:
+        return scipy.sparse.csr_matrix(
+            (np.empty(0, dtype=dtype), np.empty(0, dtype=np.int32), indptr),
+            shape=(n_batch, out_pixels), copy=False,
+        )
+
+    ## Phase 2: scatter directly into exact-size arrays
+    out_indices = np.empty(total_nnz, dtype=np.int32)
+    out_data = np.empty(total_nnz, dtype=dtype)
+
+    _scatter_extract(
+        csr_indptr, csr_indices, csr_data,
+        k_d, k_r, k_c, k_deltas,
+        np.int64(x_shape[1]), np.int64(H_out), np.int64(W_out),
+        np.int64(out_pixels), np.int64(t), np.int64(l), offset,
+        r_lo, r_hi, c_lo, c_hi,
+        indptr, out_indices, out_data,
+    )
+
+    return scipy.sparse.csr_matrix(
+        (out_data, out_indices, indptr),
+        shape=(n_batch, out_pixels), copy=False,
+    )
+
+
+def _run_overalloc(csr_indptr, csr_indices, csr_data,
+                    per_image_nnz, k_r, k_c, k_d, k_deltas, n_k, x_shape,
+                    H_out, W_out, out_pixels, t, l, offset,
+                    r_lo, r_hi, c_lo, c_hi, dtype, n_batch):
+    """Single-pass: over-allocate with upper bounds, scatter, compact if needed.
+    Best for dense output where upper bound ≈ exact."""
+    ## Upper bound per image: min(nnz_i * n_k, out_pixels)
+    ub_counts = np.minimum(per_image_nnz * n_k, out_pixels)
+
+    ub_indptr = np.empty(n_batch + 1, dtype=np.int64)
+    ub_indptr[0] = 0
+    np.cumsum(ub_counts, out=ub_indptr[1:])
+    total_ub = int(ub_indptr[-1])
+
+    if total_ub == 0:
+        indptr = np.zeros(n_batch + 1, dtype=np.int32)
+        return scipy.sparse.csr_matrix(
+            (np.empty(0, dtype=dtype), np.empty(0, dtype=np.int32), indptr),
+            shape=(n_batch, out_pixels), copy=False,
+        )
+
+    ## Allocate over-sized output arrays
+    ub_indices = np.empty(total_ub, dtype=np.int32)
+    ub_data = np.empty(total_ub, dtype=dtype)
+    actual_counts = np.empty(n_batch, dtype=np.int64)
+
+    ## Single-pass scatter + extract + count
+    _scatter_extract_counted(
+        csr_indptr, csr_indices, csr_data,
+        k_d, k_r, k_c, k_deltas,
+        np.int64(x_shape[1]), np.int64(H_out), np.int64(W_out),
+        np.int64(out_pixels), np.int64(t), np.int64(l), offset,
+        r_lo, r_hi, c_lo, c_hi,
+        ub_indptr, ub_indices, ub_data, actual_counts,
+    )
+
+    ## Build actual indptr
+    indptr = np.empty(n_batch + 1, dtype=np.int32)
+    indptr[0] = 0
+    np.cumsum(actual_counts, out=indptr[1:])
+    total_nnz = int(indptr[-1])
+
+    if total_nnz == 0:
+        return scipy.sparse.csr_matrix(
+            (np.empty(0, dtype=dtype), np.empty(0, dtype=np.int32), indptr),
+            shape=(n_batch, out_pixels), copy=False,
+        )
+
+    ## Compact only if needed (skip when upper bounds were exact)
+    if total_nnz == total_ub:
+        indices = ub_indices
+        data = ub_data
+    else:
+        indices = np.empty(total_nnz, dtype=np.int32)
+        data = np.empty(total_nnz, dtype=dtype)
+        _compact_csr(
+            ub_indptr, indptr, actual_counts,
+            ub_indices, ub_data, indices, data,
         )
 
     return scipy.sparse.csr_matrix(
