@@ -1,3 +1,3 @@
 from sparse_convolution.sparse_convolution import Toeplitz_convolution2d
 
-__version__ = '0.2.0'
+__version__ = '0.4.0'

@@ -1,40 +1,90 @@
+"""
+Sparse 2D convolution via Toeplitz matrix methods.
+
+Provides ``Toeplitz_convolution2d``, a class for convolving sparse 2D arrays
+with a dense 2D kernel. Four computation methods are available, each with
+multiple backends:
+
+- ``'precomputed'`` + (``'numpy'``, ``'numba'``, ``'torch'``)
+- ``'lazy'`` + (``'numpy'``, ``'torch'``)
+- ``'gather_scatter'`` + (``'numpy'``, ``'numba'``, ``'torch'``)
+- ``'direct'`` + (``'numba'``,)
+
+RH 2022
+"""
+
 from typing import Tuple, Optional, Union
 
-import scipy.sparse
 import numpy as np
+import scipy.sparse
+
+from sparse_convolution._precomputed import (
+    build_toeplitz_scipy,
+    build_toeplitz_torch,
+    compute_precomputed_scipy,
+    compute_precomputed_numba,
+    compute_precomputed_torch,
+)
+from sparse_convolution._lazy import (
+    compute_lazy_numpy,
+    compute_lazy_torch,
+)
+from sparse_convolution._gather_scatter import (
+    compute_gather_scatter,
+    HAS_NUMBA,
+    HAS_TORCH,
+)
+from sparse_convolution._direct import compute_direct
+
+## Valid (method, backend) combinations
+VALID_BACKENDS = {
+    'precomputed': ('numpy', 'numba', 'torch'),
+    'lazy': ('numpy', 'torch'),
+    'gather_scatter': ('numpy', 'numba', 'torch'),
+    'direct': ('numba',),
+}
 
 
 class Toeplitz_convolution2d():
     """
-    Convolve a 2D array with a 2D kernel using sparse matrix methods. Two
-    computation methods are available:
+    Convolve a 2D array with a 2D kernel using sparse matrix methods. Four
+    computation methods are available, each with selectable backends:
+
+    **Methods:**
 
     * ``'precomputed'``: Builds a sparse double-block Toeplitz matrix during
       initialization and uses it for fast batched convolution via
-      matrix-multiply. Ideal when the same kernel will be applied to many inputs
-      (large batch sizes, e.g. 1000+).
+      matrix-multiply. Ideal when the same kernel will be applied to many
+      inputs (large batch sizes, e.g. 1000+).
     * ``'lazy'``: Uses sparse COO broadcasting (instant init, low memory).
-      Every call uses broadcasting. Best for sparse inputs (density < ~0.1).
+      Every call recomputes from scratch. Best for sparse inputs (density
+      < ~0.1) with small batch sizes.
+    * ``'gather_scatter'``: Uses spconv-style per-kernel-position
+      gather-scatter with a chunked dense accumulator. Instant init, bounded
+      memory, and avoids the O(n log n) COO-to-CSR sort that makes
+      ``'lazy'`` slow on large batches. Best general-purpose method for
+      sparse inputs.
+    * ``'direct'``: Two-pass batch-parallel scatter using thread-local dense
+      buffers (numba only). Each thread scatters into its own L2-cache-sized
+      buffer and extracts CSR directly — zero initialization overhead, no
+      global dense buffer. 5-17x faster than ``'precomputed'`` at large
+      batch sizes (1000+). Best method for large batches of sparse inputs.
 
-    Generally, both methods are faster than scipy.signal.convolve2d when
-    convolving multiple sparse arrays with the same kernel. The ``'precomputed'``
-    method amortizes its initialization cost over many calls, while
-    ``'lazy'`` is better for one-off convolutions or very large/sparse inputs.
+    **Backends:**
+
+    * ``'numpy'``: Uses numpy/scipy operations. Available for
+      ``'precomputed'``, ``'lazy'``, and ``'gather_scatter'``.
+    * ``'numba'``: Numba JIT-compiled parallel loops. Available for
+      ``'precomputed'``, ``'gather_scatter'``, and ``'direct'``. Best CPU
+      performance after initial JIT warmup (~35ms first call).
+    * ``'torch'``: PyTorch operations with optional GPU acceleration.
+      Available for ``'precomputed'``, ``'lazy'``, and ``'gather_scatter'``.
+      Automatically uses CUDA if available (or as specified via ``device``).
+
+    Generally, all methods are faster than ``scipy.signal.convolve2d`` when
+    convolving multiple sparse arrays with the same kernel.
+
     RH 2022
-
-    Attributes:
-        x_shape (Tuple[int, int]):
-            The shape of the 2D array to be convolved.
-        k (np.ndarray):
-            2D kernel to convolve with.
-        mode (str):
-            Either ``'full'``, ``'same'``, or ``'valid'``. See
-            scipy.signal.convolve2d for details.
-        dtype (Optional[np.dtype]):
-            The data type to use for computation.
-            If ``None``, then the data type of the kernel is used.
-        method (str):
-            Either ``'precomputed'`` or ``'lazy'``.
 
     Args:
         x_shape (Tuple[int, int]):
@@ -43,38 +93,50 @@ class Toeplitz_convolution2d():
             2D kernel to convolve with.
         mode (str):
             Convolution mode, either ``'full'``, ``'same'``, or ``'valid'``.
-            See scipy.signal.convolve2d for details. (Default is ``'same'``)
+            See ``scipy.signal.convolve2d`` for details.
         dtype (Optional[np.dtype]):
-            The data type to use for the Toeplitz matrix. Ideally, this matches
-            the data type of the input array. If ``None``, then the data type of
-            the kernel is used. (Default is ``None``)
+            Data type for computation. If ``None``, uses the kernel's dtype.
         verbose (Union[bool, int]):
             If > 0, prints warnings for large expected Toeplitz matrices.
-            (Default is ``False``)
         method (str):
-            * ``'precomputed'``: Builds the Toeplitz matrix upfront. Faster for
-              large batch sizes but uses more memory and has slower
-              initialization. \n
-            * ``'lazy'``: Uses sparse COO broadcasting (instant init, low
-              memory). Every call uses broadcasting. Best for sparse inputs
-              (density < ~0.1). \n
-            (Default is ``'lazy'``)
+            Computation method: ``'precomputed'``, ``'lazy'``,
+            ``'gather_scatter'``, or ``'direct'``.
+        backend (Optional[str]):
+            Implementation backend. Valid options depend on ``method``: \\n
+            * ``'precomputed'``: ``'numpy'`` (scipy matmul), ``'numba'``
+              (parallel CSR matvec), or ``'torch'``
+            * ``'lazy'``: ``'numpy'`` (scipy COO) or ``'torch'``
+            * ``'gather_scatter'``: ``'numpy'``, ``'numba'``, or ``'torch'``
+            * ``'direct'``: ``'numba'`` (only option)
+            \\n
+            If ``None``, auto-selects the best available backend:
+            ``'numba'`` for ``'gather_scatter'`` and ``'direct'`` (if
+            installed), ``'numpy'`` otherwise.
+        max_buffer_bytes (int):
+            Maximum memory (bytes) for the dense accumulator buffer used by
+            ``'gather_scatter'``. Controls chunk size for batch processing.
+            Ignored by other methods.
+        device (Optional[str]):
+            Torch device for ``backend='torch'``. E.g. ``'cpu'``,
+            ``'cuda'``, ``'cuda:0'``. If ``None``, auto-selects CUDA if
+            available. Ignored for non-torch backends.
 
     Example:
         .. highlight:: python
         .. code-block:: python
 
-            # create Toeplitz_convolution2d object
-            toeplitz_convolution2d = Toeplitz_convolution2d(
-                x_shape=(100,30),
-                k=np.random.rand(10,10),
+            conv = Toeplitz_convolution2d(
+                x_shape=(100, 30),
+                k=np.random.rand(10, 10),
                 mode='same',
+                method='gather_scatter',
             )
-            toeplitz_convolution2d(
-                x=scipy.sparse.csr_matrix(np.random.rand(5,3000)),
+            out = conv(
+                x=scipy.sparse.csr_matrix(np.random.rand(5, 3000)),
                 batching=True,
             )
     """
+
     def __init__(
         self,
         x_shape: Tuple[int, int],
@@ -82,51 +144,105 @@ class Toeplitz_convolution2d():
         mode: str = 'same',
         dtype: Optional[np.dtype] = None,
         verbose: Union[bool, int] = False,
-        method: str = 'lazy',
+        method: str = 'direct',
+        max_buffer_bytes: int = 256 * 1024 * 1024,
+        backend: Optional[str] = None,
+        device: Optional[str] = None,
     ):
         """
-        Initializes the Toeplitz_convolution2d object. If method is
-        ``'precomputed'``, builds and stores the Toeplitz matrix.
+        Initialize the convolution object. If ``method='precomputed'``,
+        builds and stores the Toeplitz matrix immediately.
         """
-        ## Type checking
-        assert isinstance(x_shape, (tuple, list)), f"x_shape must be a tuple. Found: {type(x_shape)}"
-        assert all([isinstance(s, (int, float, np.integer, np.floating)) for s in x_shape]), f"x_shape must be a tuple of integers. Found: {[type(s) for s in x_shape]}"
+        ## Validate x_shape
+        assert isinstance(x_shape, (tuple, list)), \
+            f"x_shape must be a tuple. Found: {type(x_shape)}"
+        assert all(isinstance(s, (int, float, np.integer, np.floating)) for s in x_shape), \
+            f"x_shape must be a tuple of integers. Found: {[type(s) for s in x_shape]}"
         x_shape = (int(x_shape[0]), int(x_shape[1]))
 
+        ## Validate kernel
         assert isinstance(k, np.ndarray), "k must be a numpy array"
         assert k.ndim == 2, "k must be a 2D array"
 
+        ## Validate mode
         assert isinstance(mode, str), "mode must be a string"
-        assert mode in ['full', 'same', 'valid'], "mode must be 'full', 'same', or 'valid'"
+        assert mode in ('full', 'same', 'valid'), \
+            "mode must be 'full', 'same', or 'valid'"
 
+        ## Validate method
         assert isinstance(method, str), "method must be a string"
-        assert method in ['precomputed', 'lazy'], "method must be 'precomputed' or 'lazy'"
+        assert method in VALID_BACKENDS, \
+            f"method must be one of {list(VALID_BACKENDS.keys())}. Got: {method!r}"
 
         if mode == 'valid':
-            assert x_shape[0] >= k.shape[0] and x_shape[1] >= k.shape[1], "x must be larger than k in both dimensions for mode='valid'"
+            assert x_shape[0] >= k.shape[0] and x_shape[1] >= k.shape[1], \
+                "x must be larger than k in both dimensions for mode='valid'"
+
+        ## Resolve backend
+        if backend is None:
+            if method == 'direct':
+                assert HAS_NUMBA, (
+                    "method='direct' requires numba. Install numba or use "
+                    "method='gather_scatter' / method='precomputed'."
+                )
+                backend = 'numba'
+            elif method == 'gather_scatter':
+                backend = 'numba' if HAS_NUMBA else 'numpy'
+            else:
+                backend = 'numpy'
+        assert backend in VALID_BACKENDS[method], (
+            f"backend={backend!r} is not valid for method={method!r}. "
+            f"Valid backends: {VALID_BACKENDS[method]}"
+        )
+        if backend == 'numba':
+            assert HAS_NUMBA, "backend='numba' requires numba to be installed"
+        if backend == 'torch':
+            assert HAS_TORCH, "backend='torch' requires torch to be installed"
+
+        ## Resolve device for torch
+        if device is None and backend == 'torch':
+            import torch
+            device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
         ## Warn if Toeplitz matrix will be very large
         if verbose > 0 and method == 'precomputed':
-            n_nz_elements_expected = x_shape[0] * x_shape[1] * k.shape[0] * k.shape[1]
-            if n_nz_elements_expected >= 1e8:
+            n_nz_expected = x_shape[0] * x_shape[1] * k.shape[0] * k.shape[1]
+            if n_nz_expected >= 1e8:
                 print(
-                    "Warning: Expected number of non-zero elements in the Toeplitz matrix is large. \n"
-                    f"(x_shape[0]*x_shape[1]*k.shape[0]*k.shape[1]) = {n_nz_elements_expected} non-zero elements. \n"
-                    "This will likely be slow and have a large memory footprint. \n"
-                    "Consider using method='lazy' or breaking the `x` array into smaller chunks."
+                    "Warning: Expected number of non-zero elements in the "
+                    "Toeplitz matrix is large.\n"
+                    f"(x_shape[0]*x_shape[1]*k.shape[0]*k.shape[1]) = "
+                    f"{n_nz_expected} non-zero elements.\n"
+                    "This will likely be slow and have a large memory "
+                    "footprint.\n"
+                    "Consider using method='lazy' or 'gather_scatter'."
                 )
 
+        ## Store parameters
         self.k = k.copy()
         self.mode = mode
         self.x_shape = x_shape
         self.method = method
         self.dtype = k.dtype if dtype is None else dtype
+        self.max_buffer_bytes = max_buffer_bytes
+        self.backend = backend
+        self.device = device
 
+        ## Pre-build Toeplitz matrix for 'precomputed' method
         self._dt = None
+        self._dt_torch = None
         self._so = None
 
         if self.method == 'precomputed':
-            self._dt, self._so = self._build_toeplitz_matrix(self.x_shape, self.k, self.dtype)
+            if self.backend == 'torch':
+                self._dt_torch, self._so = build_toeplitz_torch(
+                    x_shape=self.x_shape, k=self.k,
+                    dtype=self.dtype, device=self.device,
+                )
+            else:
+                self._dt, self._so = build_toeplitz_scipy(
+                    x_shape=self.x_shape, k=self.k, dtype=self.dtype,
+                )
 
     def __call__(
         self,
@@ -140,40 +256,35 @@ class Toeplitz_convolution2d():
         Args:
             x (Union[np.ndarray, scipy.sparse.csc_matrix,
             scipy.sparse.csr_matrix]):
-                Input array(s) (i.e. image(s)) to convolve with the kernel. \n
-                * If ``batching==False``: Single 2D array to convolve with the
-                  kernel. Shape: *(self.x_shape[0], self.x_shape[1])*
-                * If ``batching==True``: Multiple 2D arrays that have been
-                  flattened into row vectors (with order='C'). \n
-                Shape: *(n_arrays, self.x_shape[0]*self.x_shape[1])*
+                Input array(s) to convolve with the kernel. \\n
+                * If ``batching==False``: Single 2D array of shape
+                  ``(x_shape[0], x_shape[1])``.
+                * If ``batching==True``: Multiple flattened 2D arrays.
+                  Shape: ``(n_arrays, x_shape[0] * x_shape[1])``.
 
             batching (bool):
-                * ``False``: x is a single 2D array.
-                * ``True``: x is a 2D array where each row is a flattened 2D
-                  array. \n
-                (Default is ``True``)
+                * ``False``: ``x`` is a single 2D array.
+                * ``True``: ``x`` contains multiple flattened 2D arrays.
 
             mode (Optional[str]):
-                Defines the mode of the convolution. Options are ``'full'``,
-                ``'same'``, or ``'valid'``. See ``scipy.signal.convolve2d`` for
-                details. Overrides the mode set in __init__. (Default is
-                ``None``, which uses the mode from __init__)
+                Override the convolution mode set in ``__init__``.
 
         Returns:
             (Union[np.ndarray, scipy.sparse.csr_matrix]):
                 out (Union[np.ndarray, scipy.sparse.csr_matrix]):
-                    * ``batching==True``: Multiple convolved 2D arrays that have
-                      been flattened into row vectors (with order='C'). Shape:
-                      *(n_arrays, height*width)*
-                    * ``batching==False``: Single convolved 2D array of shape
-                      *(height, width)*
+                    * ``batching==True``: Flattened output rows.
+                      Shape: ``(n_arrays, H_out * W_out)``.
+                    * ``batching==False``: 2D output array.
+                      Shape: ``(H_out, W_out)``.
         """
         if mode is None:
             mode = self.mode
 
-        assert mode in ('full', 'same', 'valid'), f"mode must be 'full', 'same', or 'valid'. Got: {mode!r}"
+        assert mode in ('full', 'same', 'valid'), \
+            f"mode must be 'full', 'same', or 'valid'. Got: {mode!r}"
         if mode == 'valid':
-            assert self.x_shape[0] >= self.k.shape[0] and self.x_shape[1] >= self.k.shape[1], \
+            assert self.x_shape[0] >= self.k.shape[0] and \
+                   self.x_shape[1] >= self.k.shape[1], \
                 "x must be larger than k in both dimensions for mode='valid'"
 
         issparse = scipy.sparse.issparse(x)
@@ -191,194 +302,76 @@ class Toeplitz_convolution2d():
                 f"x_shape ({self.x_shape})"
             )
 
-        ## Precomputed path: use pre-built Toeplitz matrix
-        if self._dt is not None:
-            return self._compute_toeplitz(x=x, mode=mode, batching=batching, issparse=issparse)
+        ## Route to the appropriate method + backend
+        if self.method == 'precomputed':
+            out = self._call_precomputed(x, mode, batching, issparse)
+        elif self.method == 'gather_scatter':
+            out = self._call_gather_scatter(x, mode, batching)
+        elif self.method == 'direct':
+            out = self._call_direct(x, mode, batching)
+        elif self.method == 'lazy':
+            out = self._call_lazy(x, mode, batching)
 
-        ## Lazy path: use COO broadcasting
-        out = self._compute_broadcasting(x=x, mode=mode, batching=batching)
-        out.sum_duplicates()
+        ## Ensure output format matches input format
         if not issparse:
-            out = out.toarray()
+            if scipy.sparse.issparse(out):
+                out = out.toarray()
+        else:
+            if not scipy.sparse.issparse(out):
+                out = scipy.sparse.csr_matrix(out)
+
         return out
 
-    def _compute_toeplitz(self, x, mode, batching, issparse):
-        """
-        Compute convolution using the pre-built double-block Toeplitz matrix.
-        """
-        if batching:
-            x_v = x.T  ## transpose into column vectors
-        else:
-            x_v = x.reshape(-1, 1)  ## reshape 2D array into a column vector
-
-        if issparse:
-            x_v = x_v.tocsc()
-
-        out_v = self._dt @ x_v  ## if sparse, then out_v will be a csc matrix
-
-        ## Compute crop indices based on convolution mode
-        so = self._so
-        k_shape = self.k.shape
-        if mode == 'full':
-            t = 0
-            b = so[0] + 1
-            l = 0
-            r = so[1] + 1
-        if mode == 'same':
-            t = (k_shape[0] - 1) // 2
-            b = -(k_shape[0] - 1) // 2
-            l = (k_shape[1] - 1) // 2
-            r = -(k_shape[1] - 1) // 2
-            b = self.x_shape[0] + 1 if b == 0 else b
-            r = self.x_shape[1] + 1 if r == 0 else r
-        if mode == 'valid':
-            t = (k_shape[0] - 1)
-            b = -(k_shape[0] - 1)
-            l = (k_shape[1] - 1)
-            r = -(k_shape[1] - 1)
-            b = self.x_shape[0] + 1 if b == 0 else b
-            r = self.x_shape[1] + 1 if r == 0 else r
-
-        ## Crop the output to the correct size
-        if batching:
-            idx_crop = np.zeros(so, dtype=np.bool_)
-            idx_crop[t:b, l:r] = True
-            idx_crop = idx_crop.reshape(-1)
-            out = out_v[idx_crop, :].T
-        else:
-            if issparse:
-                out = out_v.reshape(so).tocsc()[t:b, l:r]
-            else:
-                out = out_v.reshape(so)[t:b, l:r]
-        return out
-
-    def _compute_broadcasting(self, x, mode, batching):
-        """
-        Compute convolution using sparse COO broadcasting. For each nonzero
-        element in x and each nonzero kernel element, directly compute the
-        output contribution via scatter-add into a sparse output matrix.
-
-        This avoids building the full Toeplitz matrix, making initialization
-        instant and memory usage proportional to nnz(x) * nnz(k).
-        """
-        k = self.k
-        x_shape = self.x_shape
-        dtype = self.dtype
-
-        ## Compute output dimensions and spatial offsets based on mode
-        if mode == 'full':
-            H_out = x_shape[0] + k.shape[0] - 1
-            W_out = x_shape[1] + k.shape[1] - 1
-            t = l = 0
-        elif mode == 'same':
-            H_out = x_shape[0]
-            W_out = x_shape[1]
-            t = (k.shape[0] - 1) // 2
-            l = (k.shape[1] - 1) // 2
-        elif mode == 'valid':
-            H_out = x_shape[0] - k.shape[0] + 1
-            W_out = x_shape[1] - k.shape[1] + 1
-            t = k.shape[0] - 1
-            l = k.shape[1] - 1
-
-        ## Get kernel nonzero elements in COO format
-        k_coo = scipy.sparse.coo_matrix(k)
-        if k_coo.dtype != dtype:
-            k_coo = k_coo.astype(dtype)
-        k_r, k_c, k_d = k_coo.row, k_coo.col, k_coo.data  ## shape: (n_k_nnz,) each
-
-        ## Get input nonzero elements in COO format
-        x_coo = scipy.sparse.coo_matrix(x)
-        if batching:
-            n_batch = x.shape[0]
-            batch_idx = x_coo.row               ## batch index per nonzero element
-            x_flat_idx = x_coo.col              ## flattened spatial index
-            x_r = x_flat_idx // x_shape[1]      ## 2D row
-            x_c = x_flat_idx % x_shape[1]       ## 2D col
-        else:
-            batch_idx = np.zeros_like(x_coo.row)
-            x_r = x_coo.row
-            x_c = x_coo.col
-
-        ## Broadcast: outer product of input nonzeros with kernel nonzeros
-        ## Convolution: output[xr + kr, xc + kc] += x_val * k_val
-        ## Offsets (t, l) shift coordinates for 'same' and 'valid' modes
-        out_r = (x_r[:, None] + k_r[None, :] - t).ravel()  ## shape: (n_x_nnz * n_k_nnz,)
-        out_c = (x_c[:, None] + k_c[None, :] - l).ravel()
-        out_b = np.repeat(batch_idx[:, None], len(k_d), axis=1).ravel()
-        out_d = (x_coo.data[:, None] * k_d[None, :]).ravel()
-
-        ## Filter out-of-bounds contributions
-        valid = (out_r >= 0) & (out_r < H_out) & (out_c >= 0) & (out_c < W_out)
-        out_r, out_c, out_b, out_d = out_r[valid], out_c[valid], out_b[valid], out_d[valid]
-
-        ## Assemble sparse output via scatter-add (duplicate indices are summed)
-        if batching:
-            out = scipy.sparse.csr_matrix(
-                (out_d, (out_b, out_r * W_out + out_c)),
-                shape=(n_batch, H_out * W_out),
-                dtype=dtype,
+    def _call_precomputed(self, x, mode, batching, issparse):
+        """Route to the appropriate precomputed backend."""
+        if self.backend == 'torch':
+            return compute_precomputed_torch(
+                dt_torch=self._dt_torch, so=self._so,
+                x=x, k_shape=self.k.shape, x_shape=self.x_shape,
+                mode=mode, batching=batching, issparse=issparse,
+                device=self.device,
+            )
+        elif self.backend == 'numba':
+            return compute_precomputed_numba(
+                dt=self._dt, so=self._so,
+                x=x, k_shape=self.k.shape, x_shape=self.x_shape,
+                mode=mode, batching=batching, issparse=issparse,
             )
         else:
-            out = scipy.sparse.csr_matrix(
-                (out_d, (out_r, out_c)),
-                shape=(H_out, W_out),
-                dtype=dtype,
+            return compute_precomputed_scipy(
+                dt=self._dt, so=self._so,
+                x=x, k_shape=self.k.shape, x_shape=self.x_shape,
+                mode=mode, batching=batching, issparse=issparse,
             )
+
+    def _call_lazy(self, x, mode, batching):
+        """Route to the appropriate lazy backend."""
+        if self.backend == 'torch':
+            out = compute_lazy_torch(
+                x=x, k=self.k, x_shape=self.x_shape,
+                mode=mode, batching=batching, dtype=self.dtype,
+                device=self.device,
+            )
+        else:
+            out = compute_lazy_numpy(
+                x=x, k=self.k, x_shape=self.x_shape,
+                mode=mode, batching=batching, dtype=self.dtype,
+            )
+            out.sum_duplicates()
         return out
 
-    @staticmethod
-    def _build_toeplitz_matrix(x_shape, k, dtype):
-        """
-        Build the double-block Toeplitz matrix for 2D convolution. The matrix
-        encodes the full convolution operation as a single sparse
-        matrix-multiply.
-
-        Args:
-            x_shape (Tuple[int, int]):
-                Spatial dimensions (height, width) of the input.
-            k (np.ndarray):
-                2D convolution kernel.
-            dtype (np.dtype):
-                Data type for the sparse matrix entries.
-
-        Returns:
-            (Tuple[scipy.sparse.csr_matrix, Tuple[int, int]]):
-                dt (scipy.sparse.csr_matrix):
-                    The double-block Toeplitz matrix.
-                so (Tuple[int, int]):
-                    The full output shape (before mode-based cropping).
-        """
-        so = (k.shape[0] + x_shape[0] - 1, k.shape[1] + x_shape[1] - 1)
-
-        ## Build row-Toeplitz blocks for each kernel row
-        t = [scipy.sparse.diags(
-            diagonals=np.ones((k.shape[1], x_shape[1]), dtype=dtype) * k_i[::-1][:, None],
-            offsets=np.arange(-k.shape[1] + 1, 1),
-            shape=(so[1], x_shape[1]),
-            dtype=dtype,
-        ) for k_i in k]
-
-        ## Stack blocks vertically with zero padding for the input rows
-        tc = scipy.sparse.vstack(
-            t + [scipy.sparse.dia_matrix((t[0].shape), dtype=dtype)] * (x_shape[0] - 1)
+    def _call_gather_scatter(self, x, mode, batching):
+        """Route to the gather_scatter dispatch."""
+        return compute_gather_scatter(
+            x=x, k=self.k, x_shape=self.x_shape,
+            mode=mode, batching=batching, dtype=self.dtype,
+            backend=self.backend, max_buffer_bytes=self.max_buffer_bytes,
+            device=self.device,
         )
 
-        ## Assemble the doubly-blocked Toeplitz matrix by shifting block columns
-        dt = scipy.sparse.hstack([
-            Toeplitz_convolution2d._roll_sparse(
-                x=tc,
-                shift=(ii > 0) * ii * so[1],
-            ) for ii in range(x_shape[0])
-        ]).tocsr()
-
-        return dt, so
-
-    @staticmethod
-    def _roll_sparse(x, shift):
-        """
-        Roll rows of a sparse COO matrix down by ``shift`` positions.
-        """
-        out = x.copy()
-        out.row += shift
-        return out
+    def _call_direct(self, x, mode, batching):
+        """Route to the direct CSR scatter dispatch (numba only)."""
+        return compute_direct(
+            x=x, k=self.k, x_shape=self.x_shape,
+            mode=mode, batching=batching, dtype=self.dtype,
+        )
