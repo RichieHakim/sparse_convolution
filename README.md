@@ -56,7 +56,7 @@ Four methods, each with selectable backends:
 - **`direct`**: Batch-parallel scatter convolution with thread-local dense buffers (numba only). For each image in parallel, scatters kernel-weighted input values into an L2-cache-sized accumulator buffer, then extracts nonzeros into CSR format. Uses a two-phase approach: a lightweight boolean counting pass (1-byte flags, no float arithmetic) determines exact output sizes, then the scatter pass writes directly to right-sized arrays with zero waste. Interior pixels (~92-100%) skip bounds checking entirely via precomputed safe regions. O(nnz × K) per image with no init overhead. Fastest method across nearly all configurations. Requires `numba`.
 - **`precomputed`**: Builds a sparse Toeplitz matrix at init; fast batched matmul. Best for large batches with the same kernel when numba is not available.
 - **`lazy`**: COO broadcasting, no init cost. Best for very sparse inputs with small batches.
-- **`gather_scatter`** (default): Per-kernel-position scatter into a dense accumulator. General-purpose method for sparse batched inputs. Uses `numba` automatically when available, and falls back to `numpy` otherwise.
+- **`gather_scatter`**: Per-kernel-position scatter into a dense accumulator. General-purpose method for sparse batched inputs. Uses `numba` automatically when available, and falls back to `numpy` otherwise.
 
 Backend selection:
 - **`numpy`**: scipy/numpy ops. Always available.
@@ -68,12 +68,12 @@ conv = sc.Toeplitz_convolution2d(
     x_shape=(100, 100),
     k=k,
     mode='same',
-    method='gather_scatter',  # default
-    backend=None,             # numba if installed, otherwise numpy
+    method='direct',  # default
+    backend=None,     # numba for the default direct method
 )
 ```
 
-If `backend=None` (default), `gather_scatter` auto-selects `numba` when installed and falls back to `numpy` otherwise. Use `method='direct'` explicitly for the fastest numba-only implementation.
+If `backend=None` (default), `direct` uses `numba`. For environments without numba, choose a numpy-capable method explicitly, such as `method='gather_scatter', backend='numpy'` or `method='precomputed', backend='numpy'`.
 
 ## References
 - Toeplitz convolution: [stackoverflow.com/a/51865516](https://stackoverflow.com/a/51865516), [alisaaalehi/convolution_as_multiplication](https://github.com/alisaaalehi/convolution_as_multiplication)

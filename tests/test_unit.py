@@ -4,6 +4,7 @@ import time
 import numpy as np
 import scipy.signal
 import scipy.sparse
+import pytest
 
 from sparse_convolution import Toeplitz_convolution2d
 
@@ -15,6 +16,11 @@ def test_toeplitz_convolution2d():
 
     RH 2022
     """
+    import sparse_convolution.sparse_convolution as sc_module
+
+    if not sc_module.HAS_NUMBA:
+        pytest.skip("default direct backend requires numba")
+
     ## test toepltiz convolution
 
     print(f'testing with batching=False')
@@ -120,11 +126,12 @@ def test_gather_scatter_numpy_all_zero_kernel_returns_empty_sparse_output():
     assert out.nnz == 0
 
 
-def test_default_method_falls_back_without_numba(monkeypatch):
-    """Default construction should work in minimal scipy/numpy installs."""
+def test_default_method_uses_direct_numba():
+    """Default construction should use the fastest direct+numba backend."""
     import sparse_convolution.sparse_convolution as sc_module
 
-    monkeypatch.setattr(sc_module, "HAS_NUMBA", False)
+    if not sc_module.HAS_NUMBA:
+        pytest.skip("default direct backend requires numba")
 
     x = np.array([[1.0, 0.0], [0.0, 2.0]])
     k = np.array([[0.5]])
@@ -132,6 +139,6 @@ def test_default_method_falls_back_without_numba(monkeypatch):
     conv = Toeplitz_convolution2d(x_shape=x.shape, k=k, mode="same")
     out = conv(x, batching=False)
 
-    assert conv.method == "gather_scatter"
-    assert conv.backend == "numpy"
+    assert conv.method == "direct"
+    assert conv.backend == "numba"
     assert np.allclose(out, scipy.signal.convolve2d(x, k, mode="same"))
