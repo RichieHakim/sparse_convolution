@@ -136,8 +136,10 @@ jobs:
     - name: Run pytest and generate coverage report
       run: |
         # pip install tox tox-gh-actions
-        pip install pytest pytest-cov
-        python -m pytest --capture=tee-sys --cov=sparse_convolution --cov-report=xml:coverage.xml --color=yes
+        # Install numba so CI exercises the optional numba backends.
+        # Torch is intentionally omitted because it is not required for this CI job.
+        python -m pip install pytest pytest-cov numba
+        python -m pytest --capture=tee-sys -rs --cov=sparse_convolution --cov-report=xml:coverage.xml --color=yes
 
     - name: Upload coverage reports to Codecov
       uses: codecov/codecov-action@v4  ## this is a public action recognized by GitHub Actions
