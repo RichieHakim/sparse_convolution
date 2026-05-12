@@ -122,6 +122,10 @@ def _coo_numpy(batch_idx, x_r, x_c, x_data, k_r, k_c, k_d, H_out, W_out, t, l):
     all_cols = []
     all_data = []
     n_k = len(k_d)
+    if n_k == 0:
+        empty_index = np.array([], dtype=np.int64)
+        empty_data = np.array([], dtype=x_data.dtype)
+        return empty_index, empty_index, empty_data
     for ki in range(n_k):
         kr, kc, kd = k_r[ki], k_c[ki], k_d[ki]
         out_r = x_r + kr - t
