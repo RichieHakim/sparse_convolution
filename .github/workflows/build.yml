@@ -3,12 +3,9 @@ name: build
 on:
   push:
     branches: [ "main" ]
-    # branches: [ "dev" ]
-    # branches: [ "main", "dev" ]
-  # pull_request:
-    # branches: [ "main" ]
-    # branches: [ "dev" ]    
-    # branches: [ "main", "dev" ]        
+  pull_request:
+    branches: [ "main" ]
+    types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
     inputs:
       name:
