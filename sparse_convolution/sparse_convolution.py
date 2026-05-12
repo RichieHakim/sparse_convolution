@@ -110,8 +110,9 @@ class Toeplitz_convolution2d():
             * ``'direct'``: ``'numba'`` (only option)
             \\n
             If ``None``, auto-selects the best available backend:
-            ``'numba'`` for ``'gather_scatter'`` and ``'direct'`` (if
-            installed), ``'numpy'`` otherwise.
+            ``'numba'`` for ``'direct'`` (requires numba), ``'numba'`` for
+            ``'gather_scatter'`` when numba is installed, and ``'numpy'``
+            otherwise.
         max_buffer_bytes (int):
             Maximum memory (bytes) for the dense accumulator buffer used by
             ``'gather_scatter'``. Controls chunk size for batch processing.
@@ -129,7 +130,7 @@ class Toeplitz_convolution2d():
                 x_shape=(100, 30),
                 k=np.random.rand(10, 10),
                 mode='same',
-                method='gather_scatter',
+                method='direct',
             )
             out = conv(
                 x=scipy.sparse.csr_matrix(np.random.rand(5, 3000)),
