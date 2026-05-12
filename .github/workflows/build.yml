@@ -20,33 +20,22 @@ jobs:
 
   build:
 
-    name: ${{ matrix.platform }}, py${{ matrix.python-version }}, ${{ matrix.install-level }}
+    name: ${{ matrix.platform }}, py${{ matrix.python-version }}
     runs-on: ${{ matrix.platform }}
     strategy:
       fail-fast: false
       matrix:
         platform: [
-          # ubuntu-latest,
-          ubuntu-24.04,
-          ubuntu-22.04,
-          ubuntu-20.04,
-          # # windows-latest,
-          windows-2022,
-          windows-2019,
-          # # macos-latest,
-          macos-14,
-          # macos-11.0,
-          # macos-10.15,
+          ubuntu-latest,
+          windows-latest,
+          macos-latest,
         ]
-        python-version: [ 
-          # "3.9",
+        python-version: [
           "3.10",
           "3.11",
           "3.12",
-        ]
-        install-level: [
-          system,
-          user,
+          "3.13",
+          "3.14",
         ]
 
     steps:
@@ -115,15 +104,10 @@ jobs:
         uname -a
     
 
-    - name: Install package with pip dependencies -- system-level
-      if: matrix.install-level == 'system'
+    - name: Install package with pip dependencies
       run: |
         ## install dependencies with optional extras
-        pip install -v -e .
-    - name: Install package with pip dependencies -- user-level
-      if: matrix.install-level == 'user'
-      run: |
-        pip install -v -e . --user
+        python -m pip install -v -e .
 
 
     - name: Check installed packages
