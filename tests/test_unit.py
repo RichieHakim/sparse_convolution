@@ -118,3 +118,20 @@ def test_gather_scatter_numpy_all_zero_kernel_returns_empty_sparse_output():
     assert scipy.sparse.isspmatrix_csr(out)
     assert out.shape == x.shape
     assert out.nnz == 0
+
+
+def test_default_method_falls_back_without_numba(monkeypatch):
+    """Default construction should work in minimal scipy/numpy installs."""
+    import sparse_convolution.sparse_convolution as sc_module
+
+    monkeypatch.setattr(sc_module, "HAS_NUMBA", False)
+
+    x = np.array([[1.0, 0.0], [0.0, 2.0]])
+    k = np.array([[0.5]])
+
+    conv = Toeplitz_convolution2d(x_shape=x.shape, k=k, mode="same")
+    out = conv(x, batching=False)
+
+    assert conv.method == "gather_scatter"
+    assert conv.backend == "numpy"
+    assert np.allclose(out, scipy.signal.convolve2d(x, k, mode="same"))
