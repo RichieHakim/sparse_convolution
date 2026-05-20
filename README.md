@@ -75,6 +75,17 @@ conv = sc.Toeplitz_convolution2d(
 
 If `backend=None` (default), `direct` uses `numba`. For environments without numba, choose a numpy-capable method explicitly, such as `method='gather_scatter', backend='numpy'` or `method='precomputed', backend='numpy'`.
 
+## Matrix size guidance
+
+The current implementations are intended for moderately sized 2D inputs. In practice, matrices below roughly `1000 x 1000` are the safest target. Larger inputs can require very large sparse index structures or dense accumulator buffers depending on the selected method, kernel size, sparsity, batch size, and backend.
+
+For larger inputs:
+
+- prefer `method='direct'` with the default numba backend when numba is available;
+- tune `max_buffer_bytes` when using `method='gather_scatter'`;
+- avoid `method='precomputed'` unless the Toeplitz matrix size is known to fit comfortably in memory;
+- test representative data before relying on the output in production workflows.
+
 ## References
 - Toeplitz convolution: [stackoverflow.com/a/51865516](https://stackoverflow.com/a/51865516), [alisaaalehi/convolution_as_multiplication](https://github.com/alisaaalehi/convolution_as_multiplication)
 - 1D convolution matrix: [scipy.linalg.convolution_matrix](https://docs.scipy.org/doc/scipy/reference/generated/scipy.linalg.convolution_matrix.html)
