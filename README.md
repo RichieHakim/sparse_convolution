@@ -75,6 +75,16 @@ conv = sc.Toeplitz_convolution2d(
 
 If `backend=None` (default), `direct` uses `numba`. For environments without numba, choose a numpy-capable method explicitly, such as `method='gather_scatter', backend='numpy'` or `method='precomputed', backend='numpy'`.
 
+### Matrix size guidance
+
+There is no fixed matrix size limit, but the `precomputed` method builds and stores a sparse Toeplitz matrix whose expected number of non-zero entries scales as:
+
+```text
+x_shape[0] * x_shape[1] * k.shape[0] * k.shape[1]
+```
+
+When that estimate reaches `1e8` entries, `Toeplitz_convolution2d(..., verbose=1, method='precomputed')` prints a warning because initialization may be slow and memory usage may be large. For large images or kernels, prefer `method='direct'` when `numba` is available. If `numba` is not available, try `method='lazy'` or `method='gather_scatter'` to avoid precomputing the full Toeplitz matrix.
+
 ## References
 - Toeplitz convolution: [stackoverflow.com/a/51865516](https://stackoverflow.com/a/51865516), [alisaaalehi/convolution_as_multiplication](https://github.com/alisaaalehi/convolution_as_multiplication)
 - 1D convolution matrix: [scipy.linalg.convolution_matrix](https://docs.scipy.org/doc/scipy/reference/generated/scipy.linalg.convolution_matrix.html)
