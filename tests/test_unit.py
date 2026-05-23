@@ -142,3 +142,23 @@ def test_default_method_uses_direct_numba():
     assert conv.method == "direct"
     assert conv.backend == "numba"
     assert np.allclose(out, scipy.signal.convolve2d(x, k, mode="same"))
+
+
+def test_precomputed_size_checks():
+    """Verify that method='precomputed' raises ValueError for extremely large matrices and warns for large ones."""
+    # 10000x10000 image with 10x10 kernel -> 1e8 * 100 = 1e10 elements (should raise ValueError)
+    with pytest.raises(ValueError, match="extremely large"):
+        Toeplitz_convolution2d(
+            x_shape=(10000, 10000),
+            k=np.zeros((10, 10)),
+            method="precomputed",
+        )
+
+    # 1000x1000 image with 5x5 kernel -> 1e6 * 25 = 2.5e7 elements (should warn)
+    with pytest.warns(UserWarning, match="Toeplitz matrix is large"):
+        Toeplitz_convolution2d(
+            x_shape=(1000, 1000),
+            k=np.zeros((5, 5)),
+            method="precomputed",
+        )
+

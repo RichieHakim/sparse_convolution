@@ -205,19 +205,31 @@ class Toeplitz_convolution2d():
             import torch
             device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-        ## Warn if Toeplitz matrix will be very large
-        if verbose > 0 and method == 'precomputed':
+        ## Warn or fail if Toeplitz matrix will be very large
+        if method == 'precomputed':
             n_nz_expected = x_shape[0] * x_shape[1] * k.shape[0] * k.shape[1]
-            if n_nz_expected >= 1e8:
-                print(
-                    "Warning: Expected number of non-zero elements in the "
+            if n_nz_expected >= 1e9:
+                raise ValueError(
+                    f"Expected number of non-zero elements in the Toeplitz matrix "
+                    f"is extremely large ({n_nz_expected} non-zero elements).\n"
+                    f"This would likely cause a silent Out-Of-Memory (OOM) crash.\n"
+                    f"Please use a memory-efficient method like method='direct' or "
+                    f"method='gather_scatter' instead."
+                )
+            elif n_nz_expected >= 1e7:
+                import warnings
+                warnings.warn(
+                    "Expected number of non-zero elements in the "
                     "Toeplitz matrix is large.\n"
                     f"(x_shape[0]*x_shape[1]*k.shape[0]*k.shape[1]) = "
                     f"{n_nz_expected} non-zero elements.\n"
                     "This will likely be slow and have a large memory "
                     "footprint.\n"
-                    "Consider using method='lazy' or 'gather_scatter'."
+                    "Consider using method='direct' or 'gather_scatter' instead.",
+                    UserWarning,
+                    stacklevel=2,
                 )
+
 
         ## Store parameters
         self.k = k.copy()
