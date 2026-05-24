@@ -75,6 +75,11 @@ conv = sc.Toeplitz_convolution2d(
 
 If `backend=None` (default), `direct` uses `numba`. For environments without numba, choose a numpy-capable method explicitly, such as `method='gather_scatter', backend='numpy'` or `method='precomputed', backend='numpy'`.
 
+
+## Limitations
+
+The convolution is optimized for input matrices smaller than **(1000, 1000)**. For larger matrices, the Toeplitz construction may become memory-intensive or fail silently. If you need to process larger inputs, consider tiling them into smaller patches before applying sparse convolution.
+
 ## References
 - Toeplitz convolution: [stackoverflow.com/a/51865516](https://stackoverflow.com/a/51865516), [alisaaalehi/convolution_as_multiplication](https://github.com/alisaaalehi/convolution_as_multiplication)
 - 1D convolution matrix: [scipy.linalg.convolution_matrix](https://docs.scipy.org/doc/scipy/reference/generated/scipy.linalg.convolution_matrix.html)
