@@ -2,6 +2,7 @@
 Sparse 2D convolution in Python via Toeplitz matrix methods.
 
 Fast when the kernel is small, the input is sparse, and/or many arrays share the same kernel.
+Ideal with matrices smaller than ~(1000, 1000). For larger matrices the Toeplitz construction can become memory-intensive.
 
 ## Install
 ```
