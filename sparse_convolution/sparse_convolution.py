@@ -35,6 +35,7 @@ from sparse_convolution._gather_scatter import (
     HAS_TORCH,
 )
 from sparse_convolution._direct import compute_direct
+from sparse_convolution._matrix_free import MatrixFreeToeplitzConvolution2D
 
 ## Valid (method, backend) combinations
 VALID_BACKENDS = {
@@ -42,6 +43,7 @@ VALID_BACKENDS = {
     'lazy': ('numpy', 'torch'),
     'gather_scatter': ('numpy', 'numba', 'torch'),
     'direct': ('numba',),
+    'matrix_free': ('numpy',),
 }
 
 
@@ -233,6 +235,22 @@ class Toeplitz_convolution2d():
         self._dt = None
         self._dt_torch = None
         self._so = None
+        self._mf_op = None
+
+        if self.method == 'precomputed':
+            n_nz_expected = x_shape[0] * x_shape[1] * k.shape[0] * k.shape[1]
+            estimated_ram_gb = (n_nz_expected * 12) / (1024**3)
+            if n_nz_expected >= 2e7 or estimated_ram_gb >= 2.0:
+                import warnings
+                warnings.warn(
+                    f"Toeplitz_convolution2d: Expected {n_nz_expected:.2e} non-zeros (~{estimated_ram_gb:.1f} GB RAM) "
+                    "exceeds safe precomputation thresholds and would cause integer overflow or an Out-Of-Memory crash. "
+                    "Automatically switching to method='matrix_free'.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                self.method = 'matrix_free'
+                self.backend = 'numpy'
 
         if self.method == 'precomputed':
             if self.backend == 'torch':
@@ -244,6 +262,24 @@ class Toeplitz_convolution2d():
                 self._dt, self._so = build_toeplitz_scipy(
                     x_shape=self.x_shape, k=self.k, dtype=self.dtype,
                 )
+        elif self.method == 'matrix_free':
+            self._mf_op = MatrixFreeToeplitzConvolution2D(
+                x_shape=self.x_shape, k=self.k,
+                mode=self.mode, dtype=self.dtype,
+            )
+
+    def as_linear_operator(self) -> MatrixFreeToeplitzConvolution2D:
+        """
+        Return a scipy.sparse.linalg.LinearOperator representing this convolution.
+        """
+        if self._mf_op is not None and self._mf_op.mode == self.mode:
+            return self._mf_op
+        return MatrixFreeToeplitzConvolution2D(
+            x_shape=self.x_shape,
+            k=self.k,
+            mode=self.mode,
+            dtype=self.dtype,
+        )
 
     def __call__(
         self,
@@ -312,6 +348,8 @@ class Toeplitz_convolution2d():
             out = self._call_direct(x, mode, batching)
         elif self.method == 'lazy':
             out = self._call_lazy(x, mode, batching)
+        elif self.method == 'matrix_free':
+            out = self._call_matrix_free(x, mode, batching)
 
         ## Ensure output format matches input format
         if not issparse:
@@ -376,3 +414,14 @@ class Toeplitz_convolution2d():
             x=x, k=self.k, x_shape=self.x_shape,
             mode=mode, batching=batching, dtype=self.dtype,
         )
+
+    def _call_matrix_free(self, x, mode, batching):
+        """Route to the matrix-free convolution engine."""
+        if self._mf_op is None or self._mf_op.mode != mode:
+            op = MatrixFreeToeplitzConvolution2D(
+                x_shape=self.x_shape, k=self.k, mode=mode, dtype=self.dtype
+            )
+        else:
+            op = self._mf_op
+        return op(x, batching=batching, mode=mode)
+
