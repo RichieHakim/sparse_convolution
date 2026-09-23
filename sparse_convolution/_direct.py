@@ -18,13 +18,16 @@ field of view) cost the same regardless of frame size.
 
    - **Sparse output** (ratio < 1): two-phase count → scatter.
      Phase 1 uses lightweight 1-byte flags (~5× cheaper than scatter)
-     to get exact nnz. Phase 2 writes directly to exact-size arrays.
-     No over-allocation, no compaction.
+     to count the output positions each image touches. Phase 2 writes
+     into arrays of that size.
 
    - **Dense output** (ratio >= 1): single-pass over-allocate → scatter.
      Upper bound equals ``out_pixels`` (exact for dense output), so
      over-allocation waste is negligible. Skips the counting pass
-     entirely. Optional compaction if upper bounds weren't exact.
+     entirely.
+
+   Exact zeros (explicit zeros in the input, or cancellation) are dropped,
+   so an image can fall short of its bound; such batches are compacted.
 
 Output indices are int32 when they fit, else int64 (scipy's convention).
 
@@ -93,7 +96,8 @@ if HAS_NUMBA:
                    r_lo, r_hi, c_lo, c_hi,
                    Nk, counts):
         """
-        Lightweight boolean counting pass: compute exact output nnz per image.
+        Lightweight boolean counting pass: upper bound on each image's output
+        nnz (positions touched). Exact unless some outputs are exactly zero.
 
         Uses a 1-byte flag array instead of an 8-byte float buffer. No float
         multiply — just sets flags for which output positions are touched.
@@ -127,52 +131,6 @@ if HAS_NUMBA:
             counts[b] = count
 
     @numba.njit(parallel=True, fastmath=True, cache=True)
-    def _scatter_extract(x_indptr, x_indices, x_data,
-                         k_vals, k_rows, k_cols,
-                         W_in, H_out, W_out, t, l,
-                         r_lo, r_hi, c_lo, c_hi,
-                         out_indptr, out_indices, out_data):
-        """
-        Scatter + sequential-scan extraction into exact-size CSR arrays.
-
-        Writes directly to pre-allocated exact-size output arrays.
-        No over-allocation, no compaction step.
-        """
-        Nk = len(k_vals)
-        n_batch = len(x_indptr) - 1
-        for b in numba.prange(n_batch):
-            r0, c0, h, w = _bbox_out(x_indptr, x_indices, b, Nk, W_in, H_out, W_out,
-                                     r_lo, r_hi, c_lo, c_hi)
-            buf = np.zeros(h * w, dtype=out_data.dtype)
-            k_deltas = k_rows * w + k_cols  ## shape: (Nk,), flat offsets in the bbox
-
-            for jj in range(x_indptr[b], x_indptr[b + 1]):
-                x_flat = x_indices[jj]
-                x_val = x_data[jj]
-                x_r = x_flat // W_in
-                x_c = x_flat % W_in
-
-                if r_lo <= x_r < r_hi and c_lo <= x_c < c_hi:
-                    x_base = (x_r - t - r0) * w + x_c - l - c0
-                    for ki in range(Nk):
-                        buf[x_base + k_deltas[ki]] += x_val * k_vals[ki]
-                else:
-                    for ki in range(Nk):
-                        out_r = x_r + k_rows[ki] - t
-                        out_c = x_c + k_cols[ki] - l
-                        if 0 <= out_r < H_out and 0 <= out_c < W_out:
-                            buf[(out_r - r0) * w + out_c - c0] += x_val * k_vals[ki]
-
-            pos = out_indptr[b]
-            for lr in range(h):
-                for lc in range(w):
-                    v = buf[lr * w + lc]
-                    if v != 0.0:
-                        out_indices[pos] = (r0 + lr) * W_out + c0 + lc
-                        out_data[pos] = v
-                        pos += 1
-
-    @numba.njit(parallel=True, fastmath=True, cache=True)
     def _scatter_extract_counted(x_indptr, x_indices, x_data,
                                  k_vals, k_rows, k_cols,
                                  W_in, H_out, W_out, t, l,
@@ -180,9 +138,8 @@ if HAS_NUMBA:
                                  ub_indptr, out_indices, out_data,
                                  actual_counts):
         """
-        Scatter + extraction into over-allocated CSR arrays, recording
-        actual nnz per image. Used for the dense-output path where the
-        counting pass is skipped.
+        Scatter + extraction into CSR arrays sized by upper bounds, recording
+        actual nnz per image (exact zeros are not stored).
         """
         Nk = len(k_vals)
         n_batch = len(x_indptr) - 1
@@ -253,11 +210,13 @@ def compute_direct(x, k, x_shape, mode, batching, dtype):
     density:
 
     - **Sparse output** (scatter_ops < out_pixels): two-phase count →
-      scatter. Phase 1 uses 1-byte flags to get exact nnz. Phase 2
-      writes directly to exact-size arrays. No compaction.
+      scatter. Phase 1 uses 1-byte flags to count the output positions
+      each image touches. Phase 2 writes into arrays of that size.
     - **Dense output** (scatter_ops >= out_pixels): single-pass scatter
       with upper-bound allocation. Skips the counting pass (which would
-      be redundant since output is nearly dense). Optional compaction.
+      be redundant since output is nearly dense).
+
+    Exact zeros are dropped; if any are, the output is compacted.
 
     Also uses interior/boundary split and precomputed delta tables for
     index arithmetic reduction.
@@ -337,11 +296,13 @@ def _run_adaptive(x_csr, k_r, k_c, k_d, n_k, x_shape,
                    H_out, W_out, out_pixels, t, l,
                    r_lo, r_hi, c_lo, c_hi, dtype):
     """
-    Adaptive dispatch: choose between counted (two-phase) and direct
-    (single-pass over-allocate) strategies based on expected output density.
+    Adaptive dispatch: bound each image's output nnz with a counting pass
+    (sparse output) or with ``min(nnz_i * n_k, out_pixels)`` (dense output),
+    then scatter into arrays of that size and compact if any image fell
+    short (exact zeros are dropped).
 
     When mean scatter ops per pixel < 1, the output is sparse and the
-    counting pass saves more (avoiding compaction) than it costs.
+    counting pass saves more (avoiding over-allocation) than it costs.
     When >= 1, the output is nearly dense, upper bounds are tight, and
     the counting pass is wasted work.
     """
@@ -357,79 +318,19 @@ def _run_adaptive(x_csr, k_r, k_c, k_d, n_k, x_shape,
     mean_scatter_ops = np.mean(per_image_nnz) * n_k if n_batch > 0 else 0
 
     if mean_scatter_ops < out_pixels:
-        ## Sparse output: two-phase (count → exact alloc → scatter)
-        return _run_counted(
-            csr_indptr, csr_indices, csr_data,
-            k_r, k_c, k_d, n_k, x_shape,
-            H_out, W_out, out_pixels, t, l,
-            r_lo, r_hi, c_lo, c_hi, dtype, n_batch,
+        ## Sparse output: count the output positions each image touches
+        ub_counts = np.empty(n_batch, dtype=np.int64)
+        _count_nnz(
+            csr_indptr, csr_indices,
+            k_r, k_c,
+            np.int64(x_shape[1]), np.int64(H_out), np.int64(W_out),
+            np.int64(t), np.int64(l),
+            r_lo, r_hi, c_lo, c_hi,
+            np.int64(n_k), ub_counts,
         )
     else:
-        ## Dense output: single-pass (over-alloc → scatter → compact)
-        return _run_overalloc(
-            csr_indptr, csr_indices, csr_data,
-            per_image_nnz, k_r, k_c, k_d, n_k, x_shape,
-            H_out, W_out, out_pixels, t, l,
-            r_lo, r_hi, c_lo, c_hi, dtype, n_batch,
-        )
-
-
-def _run_counted(csr_indptr, csr_indices, csr_data,
-                  k_r, k_c, k_d, n_k, x_shape,
-                  H_out, W_out, out_pixels, t, l,
-                  r_lo, r_hi, c_lo, c_hi, dtype, n_batch):
-    """Two-phase: count pass → exact-alloc scatter. Best for sparse output."""
-    ## Phase 1: lightweight boolean count
-    exact_counts = np.empty(n_batch, dtype=np.int64)
-    _count_nnz(
-        csr_indptr, csr_indices,
-        k_r, k_c,
-        np.int64(x_shape[1]), np.int64(H_out), np.int64(W_out),
-        np.int64(t), np.int64(l),
-        r_lo, r_hi, c_lo, c_hi,
-        np.int64(n_k), exact_counts,
-    )
-
-    ## Build exact indptr; int32 when indices fit, as scipy does
-    total_nnz = int(exact_counts.sum())
-    dtype_idx = _index_dtype(max(n_batch, out_pixels, total_nnz))
-    indptr = np.empty(n_batch + 1, dtype=dtype_idx)
-    indptr[0] = 0
-    np.cumsum(exact_counts, out=indptr[1:])
-
-    if total_nnz == 0:
-        return scipy.sparse.csr_matrix(
-            (np.empty(0, dtype=dtype), np.empty(0, dtype=dtype_idx), indptr),
-            shape=(n_batch, out_pixels), copy=False,
-        )
-
-    ## Phase 2: scatter directly into exact-size arrays
-    out_indices = np.empty(total_nnz, dtype=dtype_idx)
-    out_data = np.empty(total_nnz, dtype=dtype)
-
-    _scatter_extract(
-        csr_indptr, csr_indices, csr_data,
-        k_d, k_r, k_c,
-        np.int64(x_shape[1]), np.int64(H_out), np.int64(W_out),
-        np.int64(t), np.int64(l),
-        r_lo, r_hi, c_lo, c_hi,
-        indptr, out_indices, out_data,
-    )
-
-    return scipy.sparse.csr_matrix(
-        (out_data, out_indices, indptr),
-        shape=(n_batch, out_pixels), copy=False,
-    )
-
-
-def _run_overalloc(csr_indptr, csr_indices, csr_data,
-                    per_image_nnz, k_r, k_c, k_d, n_k, x_shape,
-                    H_out, W_out, out_pixels, t, l,
-                    r_lo, r_hi, c_lo, c_hi, dtype, n_batch):
-    """Single-pass: over-allocate with upper bounds, scatter, compact if needed.
-    Best for dense output where upper bound ≈ exact."""
-    ## Upper bound per image: min(nnz_i * n_k, out_pixels)
-    ub_counts = np.minimum(per_image_nnz * n_k, out_pixels)
+        ## Dense output: upper bound per image is min(nnz_i * n_k, out_pixels)
+        ub_counts = np.minimum(per_image_nnz * n_k, out_pixels)
 
     ub_indptr = np.empty(n_batch + 1, dtype=np.int64)
     ub_indptr[0] = 0
@@ -444,12 +345,12 @@ def _run_overalloc(csr_indptr, csr_indices, csr_data,
             shape=(n_batch, out_pixels), copy=False,
         )
 
-    ## Allocate over-sized output arrays
+    ## Allocate upper-bound-sized output arrays
     ub_indices = np.empty(total_ub, dtype=dtype_idx)
     ub_data = np.empty(total_ub, dtype=dtype)
     actual_counts = np.empty(n_batch, dtype=np.int64)
 
-    ## Single-pass scatter + extract + count
+    ## Scatter + extract + count
     _scatter_extract_counted(
         csr_indptr, csr_indices, csr_data,
         k_d, k_r, k_c,
