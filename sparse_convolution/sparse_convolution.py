@@ -65,10 +65,11 @@ class Toeplitz_convolution2d():
       ``'lazy'`` slow on large batches. Best general-purpose method for
       sparse inputs.
     * ``'direct'``: Two-pass batch-parallel scatter using thread-local dense
-      buffers (numba only). Each thread scatters into its own L2-cache-sized
-      buffer and extracts CSR directly — zero initialization overhead, no
-      global dense buffer. 5-17x faster than ``'precomputed'`` at large
-      batch sizes (1000+). Best method for large batches of sparse inputs.
+      buffers (numba only). Each thread scatters into a buffer spanning its
+      image's output bounding box and extracts CSR directly — zero
+      initialization overhead, no global dense buffer. 5-17x faster than
+      ``'precomputed'`` at large batch sizes (1000+). Best method for large
+      batches of sparse inputs.
 
     **Backends:**
 

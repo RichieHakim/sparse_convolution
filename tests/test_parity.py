@@ -648,6 +648,86 @@ def test_direct_exhaustive_small_shapes():
             )
 
 
+@pytest.mark.skipif(not _has_numba(), reason="numba not installed")
+@pytest.mark.parametrize("k_shape,k_offset_support", [((5, 5), False), ((7, 4), True)])
+@pytest.mark.parametrize("n_dense", [0, 4])
+def test_direct_localized_blobs(mode, k_shape, k_offset_support, n_dense):
+    """
+    One small blob per image at random positions, the frame corners, plus
+    empty images. Exercises the per-image output bounding box: clipping at
+    the frame edges and kernels whose nonzero support is offset. ``n_dense``
+    fully dense images push the batch onto the over-allocate path.
+    """
+    x_shape = (60, 45)
+    rng = np.random.default_rng(42)
+    kernel = rng.random(k_shape)
+    if k_offset_support:
+        kernel[:2] = 0  ## support starts at row 2
+        kernel[:, -1] = 0  ## and ends one column early
+
+    h, w = x_shape[0] - 3, x_shape[1] - 3
+    corners = [(0, 0), (h, 0), (0, w), (h, w)]
+    corners += [tuple(rng.integers(0, (h, w))) for _ in range(20)]
+    x_dense = np.zeros((len(corners) + 2 + n_dense, *x_shape))  ## (n_images, H, W)
+    for i, (r, c) in enumerate(corners):
+        x_dense[i, r:r + 3, c:c + 3] = rng.random((3, 3)) * (rng.random((3, 3)) > 0.3)
+    x_dense[len(corners) + 2:] = rng.random((n_dense, *x_shape))  ## after 2 empty
+    x = scipy.sparse.csr_matrix(x_dense.reshape(len(x_dense), -1))
+
+    conv = Toeplitz_convolution2d(x_shape=x_shape, k=kernel, mode=mode, method='direct')
+    out = conv(x=x, batching=True)
+    ref = np.stack([
+        scipy.signal.convolve2d(x_i, kernel, mode=mode).reshape(-1) for x_i in x_dense
+    ])
+    is_overalloc = x.getnnz(axis=1).mean() * np.count_nonzero(kernel) >= out.shape[1]
+    assert is_overalloc == (n_dense > 0), "batch is on the wrong dispatch path"
+    assert out.has_sorted_indices
+    diff = np.abs(out.toarray() - ref).max()
+    assert diff < 1e-10, f"max diff={diff:.2e} (k={k_shape}, n_dense={n_dense})"
+
+
+@pytest.mark.skipif(not _has_numba(), reason="numba not installed")
+@pytest.mark.parametrize(
+    "x_shape,dtype_idx", [((500, 700), np.int32), ((50_000, 50_000), np.int64)],
+)
+def test_direct_index_dtype(x_shape, dtype_idx):
+    """
+    Frames with more than 2**31 pixels need int64 output indices. Small
+    blobs keep the bounding-box buffers (and this test) cheap.
+    """
+    rng = np.random.default_rng(42)
+    kernel = rng.random((5, 5))
+    blob = rng.random((4, 6))
+    t = l = 2  ## 'same' mode offsets for a 5x5 kernel
+    H, W = x_shape
+    corners = [(0, 0), (H // 2, W // 3), (H - 4, W - 6)]
+
+    ## Build the input without a dense frame
+    rr, cc = np.meshgrid(np.arange(4), np.arange(6), indexing='ij')  ## shape: (4, 6)
+    idx_row = np.repeat(np.arange(len(corners)), blob.size)
+    idx_col = np.concatenate([((rr + r) * W + cc + c).ravel() for r, c in corners])
+    x = scipy.sparse.csr_matrix(
+        (np.tile(blob.ravel(), len(corners)), (idx_row, idx_col)),
+        shape=(len(corners), H * W),
+    )
+
+    conv = Toeplitz_convolution2d(
+        x_shape=x_shape, k=kernel, mode='same', method='direct',
+    )
+    out = conv(x=x, batching=True)
+    assert out.indices.dtype == dtype_idx and out.indptr.dtype == dtype_idx
+
+    ## Reference: the blob's full convolution placed at (r - t, c - l), clipped
+    full = scipy.signal.convolve2d(blob, kernel, mode='full')  ## shape: (8, 10)
+    pp, qq = np.meshgrid(*[np.arange(n) for n in full.shape], indexing='ij')
+    for i, (r, c) in enumerate(corners):
+        out_r, out_c = (pp + r - t).ravel(), (qq + c - l).ravel()
+        inside = (out_r >= 0) & (out_r < H) & (out_c >= 0) & (out_c < W)
+        row = out[i]
+        assert np.array_equal(row.indices, out_r[inside] * W + out_c[inside])
+        assert np.allclose(row.data, full.ravel()[inside], atol=1e-12)
+
+
 ## ---------------------------------------------------------------------------
 ## Dense input tests (non-sparse inputs)
 ## ---------------------------------------------------------------------------
