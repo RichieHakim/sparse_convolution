@@ -728,6 +728,76 @@ def test_direct_index_dtype(x_shape, dtype_idx):
         assert np.allclose(row.data, full.ravel()[inside], atol=1e-12)
 
 
+@pytest.mark.skipif(not _has_numba(), reason="numba not installed")
+@pytest.mark.parametrize("data,indices", [
+    ([0.0], [55]),  ## explicitly stored zero
+    ([1.0, -1.0], [55, 56]),  ## outputs that cancel to exactly zero
+])
+def test_direct_exact_zeros(data, indices):
+    """
+    Outputs that are exactly zero are dropped without leaving unfilled
+    slots. Regression: the counting pass reserved slots for them, leaving
+    garbage indices in the returned CSR.
+    """
+    x = scipy.sparse.csr_matrix(
+        (np.array(data), np.array(indices), np.array([0, len(data)])), shape=(1, 100),
+    )
+    conv = Toeplitz_convolution2d(
+        x_shape=(10, 10), k=np.ones((3, 3)), mode='same', method='direct',
+    )
+    out = conv(x=x, batching=True)
+    out.check_format(full_check=True)
+    assert np.all(out.data != 0)
+    ref = scipy.signal.convolve2d(
+        x.toarray().reshape(10, 10), np.ones((3, 3)), mode='same',
+    )
+    assert np.abs(out.toarray().reshape(10, 10) - ref).max() < 1e-12
+
+
+@pytest.mark.skipif(not _has_numba(), reason="numba not installed")
+def test_direct_fuzz_vs_scipy():
+    """
+    Random small frames, modes and kernels (including single-tap
+    displacements, offset supports and kernels larger than the image) with
+    sparse inputs that include explicit zeros, duplicates and exact
+    cancellations. Covers both dispatch paths and the bounding-box path.
+    """
+    rng = np.random.default_rng(0)
+    values = np.array([-1.0, 0.0, 0.5, 1.0])  ## few distinct values: outputs can cancel
+    n_counted = n_overalloc = 0
+    for _ in range(1000):
+        H, W = (int(v) for v in rng.integers(1, 13, size=2))
+        k_shape = tuple(int(v) for v in rng.integers(1, 25, size=2))
+        mode = str(rng.choice(['full', 'same', 'valid']))
+        if mode == 'valid' and (k_shape[0] > H or k_shape[1] > W):
+            continue
+        kernel = rng.choice(values, size=k_shape) * (rng.random(k_shape) < rng.random())
+        batch = int(rng.integers(1, 6))
+        n = int(rng.integers(0, 4 * batch))
+        ## COO -> CSR sums duplicates and keeps explicit zeros
+        idx_row, idx_col = rng.integers(0, batch, n), rng.integers(0, H * W, n)
+        x = scipy.sparse.csr_matrix(
+            (rng.choice(values, size=n), (idx_row, idx_col)), shape=(batch, H * W),
+        )
+
+        conv = Toeplitz_convolution2d(
+            x_shape=(H, W), k=kernel, mode=mode, method='direct',
+        )
+        out = conv(x=x, batching=True)
+        ref = np.stack([
+            scipy.signal.convolve2d(x_i.reshape(H, W), kernel, mode=mode).reshape(-1)
+            for x_i in x.toarray()
+        ])  ## shape: (batch, H_out * W_out)
+        out.check_format(full_check=True)
+        assert out.has_sorted_indices and np.all(out.data != 0)
+        assert np.abs(out.toarray() - ref).max() < 1e-12, (H, W, k_shape, mode)
+
+        is_counted = x.getnnz(axis=1).mean() * np.count_nonzero(kernel) < ref.shape[1]
+        n_counted += int(is_counted)
+        n_overalloc += int(not is_counted)
+    assert n_counted > 100 and n_overalloc > 100, (n_counted, n_overalloc)
+
+
 ## ---------------------------------------------------------------------------
 ## Dense input tests (non-sparse inputs)
 ## ---------------------------------------------------------------------------
